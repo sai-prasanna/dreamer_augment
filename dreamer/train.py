@@ -29,8 +29,8 @@ tune.run(
         "num_workers": 0,
         "env": "cartpole",
         "dreamer_model": tune.grid_search([
-            {"augment": {"params": {"consistent": True}, "augmented_target": False}},
             {},
+            {"augment": {"params": {"consistent": True}, "augmented_target": False}},
             {"augment": {"params": {"consistent": True}, "augmented_target": True}},
             {"augment": {"params": {"consistent": False}, "augmented_target": False}},
             {"augment": {"params": {"consistent": False}, "augmented_target": True}},

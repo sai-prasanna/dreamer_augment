@@ -34,7 +34,7 @@ def compute_dreamer_loss(
     discount=0.99,
     lambda_=0.95,
     kl_coeff=1.0,
-    free_nats=3.0,
+    kl_balance=0.8,
     log=False,
 ):
     """Constructs loss for the Dreamer objective
@@ -79,12 +79,20 @@ def compute_dreamer_loss(
     reward_pred = model.reward(features)
     image_loss = -torch.mean(image_pred.log_prob(obs_target))
     reward_loss = -torch.mean(reward_pred.log_prob(reward))
+    #prior_dist = model.dynamics.get_dist(prior[0], prior[1])
+    #post_dist = model.dynamics.get_dist(post[0], post[1])
     prior_dist = model.dynamics.get_dist(prior[0], prior[1])
+    prior_dist_detached = model.dynamics.get_dist(prior[0].detach(), prior[1].detach())
     post_dist = model.dynamics.get_dist(post[0], post[1])
+    post_dist_detached = model.dynamics.get_dist(post[0].detach(), post[1].detach())
+    kl_lhs = torch.mean(
+        torch.distributions.kl_divergence(post_dist_detached, prior_dist))#.sum(dim=2))
+    kl_rhs = torch.mean(
+        torch.distributions.kl_divergence(post_dist, prior_dist_detached))#.sum(dim=2))
+    div = kl_balance * kl_lhs + (1-kl_balance)*kl_rhs
     div = torch.mean(
         torch.distributions.kl_divergence(post_dist, prior_dist).sum(dim=2)
     )
-    div = torch.clamp(div, min=free_nats)
     model_loss = kl_coeff * div + reward_loss + image_loss
 
     # Actor Loss
@@ -183,7 +191,7 @@ def dreamer_loss(policy, model, dist_class, train_batch):
         policy.config["discount"],
         policy.config["lambda"],
         policy.config["kl_coeff"],
-        policy.config["free_nats"],
+        policy.config["kl_balance"],
         log_gif,
     )
 

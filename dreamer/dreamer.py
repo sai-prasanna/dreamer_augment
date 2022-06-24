@@ -45,10 +45,10 @@ DEFAULT_CONFIG = with_common_config({
     "batch_length": 50,
     # Imagination Horizon for Training Actor and Critic
     "imagine_horizon": 15,
-    # Free Nats
-    "free_nats": 3.0,
     # KL Coeff for the Model Loss
     "kl_coeff": 1.0,
+    # KL balance for the model loss
+    "kl_balance": 0.8,
     # Distributed Dreamer not implemented yet
     "num_workers": 0,
     # Prefill Timesteps
@@ -163,7 +163,7 @@ class DreamerIteration:
 
         # Dreamer training loop.
         for n in range(self.dreamer_train_iters):
-            print(f"sub-iteration={n}/{self.dreamer_train_iters}")
+            #print(f"sub-iteration={n}/{self.dreamer_train_iters}")
             batch = self.episode_buffer.sample(self.batch_size)
             # if n == self.dreamer_train_iters - 1:
             #     batch["log_gif"] = True
