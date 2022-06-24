@@ -71,10 +71,15 @@ DEFAULT_CONFIG = with_common_config({
         "hidden_size": 400,
         # Action STD
         "action_init_std": 5.0,
-        "pad": 4,
-        "consistent": True,
+        "augment": {
+            "type": "RandShiftsAug",
+            "params": {
+                "pad": 4,
+                "consistent": True
+            },
+            "augmented_target": False
+        },
     },
-
     "env_config": {
         # Repeats action send by policy for frame_skip times in env
         "frame_skip": 2,

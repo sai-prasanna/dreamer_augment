@@ -4,16 +4,17 @@ import subprocess
 
 from ray import tune
 from ray.tune.registry import register_env
-from ray.rllib.examples.env.dm_control_suite import cheetah_run
+from ray.rllib.examples.env.dm_control_suite import cartpole_swingup
 import os
 
 from dreamer.dreamer import DREAMERTrainer
 
 
+os.environ['MUJOCO_GL'] = 'egl'
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 ray.init()
-register_env("cheetah_run", lambda x: cheetah_run())
+register_env("cartpole", lambda x: cartpole_swingup())
 tune.run(
     DREAMERTrainer,
     name="dmc-dreamer",
@@ -26,11 +27,13 @@ tune.run(
         "framework": "torch",
         "num_gpus": 1,
         "num_workers": 0,
-        #"matching_coeff": 0.0001,
-        #"mem_smoothing": 0.1,
-        "env": "cheetah_run",
-        "dreamer_model": {
-            "consistent": True#tune.grid_search([True, False])
-        },
-    },
+        "env": "cartpole",
+        "dreamer_model": tune.grid_search([
+            {"augment": {"params": {"consistent": True}, "augmented_target": False}},
+            {},
+            {"augment": {"params": {"consistent": True}, "augmented_target": True}},
+            {"augment": {"params": {"consistent": False}, "augmented_target": False}},
+            {"augment": {"params": {"consistent": False}, "augmented_target": True}},
+        ])
+    }
 )

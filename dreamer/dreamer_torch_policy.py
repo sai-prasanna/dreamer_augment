@@ -13,7 +13,8 @@ from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.torch_utils import apply_grad_clipping
 from ray.rllib.utils.typing import AgentID
 
-from dreamer.dreamer_model import RandomShiftsAug
+from dreamer.dreamer_model import DreamerModel, RandomShiftsAug
+import dreamer
 from dreamer.utils import FreezeParameters
 
 torch, nn = try_import_torch()
@@ -28,8 +29,8 @@ def compute_dreamer_loss(
     obs,
     action,
     reward,
-    model,
-    imagine_horizon,
+    model: DreamerModel,
+    imagine_horizon: int,
     discount=0.99,
     lambda_=0.95,
     kl_coeff=1.0,
@@ -61,16 +62,22 @@ def compute_dreamer_loss(
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     # PlaNET Model Loss
-    obs_aug = model.aug(obs).contiguous()
-    assert obs_aug.size()==obs.size()
-    assert obs_aug.stride()==obs.stride()
-    #print(obs.size(), obs_aug.size(), 'sizes here')
-    latent = model.encoder(obs_aug)#_aug)
+    if model.augment:
+        obs_aug = model.augment(obs).contiguous()
+        if model.augmented_target:
+            obs_target = obs_aug
+        else:
+            obs_target = obs
+    else:
+        obs_aug = obs
+        obs_target = obs
+    
+    latent = model.encoder(obs_aug)
     post, prior = model.dynamics.observe(latent, action)
     features = model.dynamics.get_feature(post)
     image_pred = model.decoder(features)
     reward_pred = model.reward(features)
-    image_loss = -torch.mean(image_pred.log_prob(obs))
+    image_loss = -torch.mean(image_pred.log_prob(obs_target))
     reward_loss = -torch.mean(reward_pred.log_prob(reward))
     prior_dist = model.dynamics.get_dist(prior[0], prior[1])
     post_dist = model.dynamics.get_dist(post[0], post[1])
@@ -288,7 +295,7 @@ def preprocess_episode(
 DreamerTorchPolicy = build_policy_class(
     name="DreamerTorchPolicy",
     framework="torch",
-    get_default_config=lambda: ray.rllib.agents.dreamer.dreamer.DEFAULT_CONFIG,
+    get_default_config=lambda: dreamer.dreamer.DEFAULT_CONFIG,
     action_sampler_fn=action_sampler_fn,
     postprocess_fn=preprocess_episode,
     loss_fn=dreamer_loss,
