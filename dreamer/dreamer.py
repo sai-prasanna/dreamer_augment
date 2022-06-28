@@ -36,13 +36,19 @@ DEFAULT_CONFIG = with_common_config({
     # Clipping is done inherently via policy tanh.
     "clip_actions": False,
     # Training iterations per data collection from real env
-    "dreamer_train_iters": 100,
+    "min_train_iters": 100,
+    "max_train_iters": 100,
+    "train_iters_per_episode": 100,
+    # Normalize observations
+    "normalize": False,
     # Horizon for Enviornment (1000 for Mujoco/DMC)
     "horizon": 1000,
     # Number of episodes to sample for Loss Calculation
     "batch_size": 50,
     # Length of each episode to sample for Loss Calculation
     "batch_length": 50,
+    # Number of episodes in the episodic buffer
+    "eps_buffer_max_length": 4000,
     # Imagination Horizon for Training Actor and Critic
     "imagine_horizon": 15,
     # KL Coeff for the Model Loss
@@ -72,7 +78,7 @@ DEFAULT_CONFIG = with_common_config({
         # Action STD
         "action_init_std": 5.0,
         "augment": {
-            "type": "RandShiftsAug",
+            "type": "RandShiftAug", # No augmentation
             "params": {
                 "pad": 4,
                 "consistent": True
@@ -103,6 +109,7 @@ class EpisodicBuffer(object):
         self.episodes = []
         self.max_length = max_length
         self.timesteps = 0
+        self.total_episodes = 0
         self.length = length
 
     def add(self, batch: SampleBatchType):
@@ -116,6 +123,7 @@ class EpisodicBuffer(object):
         self.timesteps += batch.count
         episodes = batch.split_by_episode()
         self.episodes.extend(episodes)
+        self.total_episodes += len(episodes)
 
         if len(self.episodes) > self.max_length:
             delta = len(self.episodes) - self.max_length
@@ -151,18 +159,23 @@ def total_sampled_timesteps(worker):
 
 class DreamerIteration:
     def __init__(
-        self, worker, episode_buffer, dreamer_train_iters, batch_size, act_repeat
+        self, worker, episode_buffer, min_train_iters, max_train_iters, train_iters_per_episode, batch_size, act_repeat
     ):
         self.worker = worker
         self.episode_buffer = episode_buffer
-        self.dreamer_train_iters = dreamer_train_iters
         self.repeat = act_repeat
         self.batch_size = batch_size
+        # Scheduling the dreamer updates
+        self.min_train_iters = min_train_iters
+        self.max_train_iters = max_train_iters
+        self.train_iters_per_episode = train_iters_per_episode
+
+
 
     def __call__(self, samples):
-
+        num_iterations = min(max(self.episode_buffer.total_episodes * self.train_iters_per_episode, self.min_train_iters), self.max_train_iters)
         # Dreamer training loop.
-        for n in range(self.dreamer_train_iters):
+        for n in range(num_iterations):
             #print(f"sub-iteration={n}/{self.dreamer_train_iters}")
             batch = self.episode_buffer.sample(self.batch_size)
             # if n == self.dreamer_train_iters - 1:
@@ -184,6 +197,7 @@ class DreamerIteration:
         res["info"] = metrics.info
         res["info"].update(metrics.counters)
         res["timesteps_total"] = metrics.counters[STEPS_SAMPLED_COUNTER]
+        res["dreamer_train_iterations"] = num_iterations
 
         self.episode_buffer.add(samples)
         return res
@@ -235,7 +249,7 @@ class DREAMERTrainer(Trainer):
         ), "Dreamer execution_plan does NOT take any additional parameters"
 
         # Special replay buffer for Dreamer agent.
-        episode_buffer = EpisodicBuffer(length=config["batch_length"])
+        episode_buffer = EpisodicBuffer(length=config["batch_length"], max_length=config["eps_buffer_max_length"])
 
         local_worker = workers.local_worker()
 
@@ -245,7 +259,6 @@ class DREAMERTrainer(Trainer):
             episode_buffer.add(samples)
 
         batch_size = config["batch_size"]
-        dreamer_train_iters = config["dreamer_train_iters"]
         act_repeat = config["action_repeat"]
 
         rollouts = ParallelRollouts(workers)
@@ -253,7 +266,9 @@ class DREAMERTrainer(Trainer):
             DreamerIteration(
                 local_worker,
                 episode_buffer,
-                dreamer_train_iters,
+                config["min_train_iters"],
+                config["max_train_iters"],
+                config["train_iters_per_episode"],
                 batch_size,
                 act_repeat,
             )

@@ -35,6 +35,7 @@ def compute_dreamer_loss(
     lambda_=0.95,
     kl_coeff=1.0,
     kl_balance=0.8,
+    normalize=False,
     log=False,
 ):
     """Constructs loss for the Dreamer objective
@@ -61,6 +62,10 @@ def compute_dreamer_loss(
     )
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    # Normalize
+    if normalize: 
+        obs = (obs / 255) - 0.5
+
     # PlaNET Model Loss
     if model.augment:
         obs_aug = model.augment(obs).contiguous()
@@ -192,6 +197,7 @@ def dreamer_loss(policy, model, dist_class, train_batch):
         policy.config["lambda"],
         policy.config["kl_coeff"],
         policy.config["kl_balance"],
+        policy.config["normalize"],
         log_gif,
     )
 
@@ -236,7 +242,8 @@ def action_sampler_fn(policy, model, input_dict, state, explore, timestep):
             # Very hacky, but works on all envs
             state = model.get_initial_state()
         action, logp, state = model.policy(obs, state, explore)
-        action = td.Normal(action, policy.config["explore_noise"]).sample()
+        if policy.config["explore_noise"] > 0.0:
+            action = td.Normal(action, policy.config["explore_noise"]).sample()
         action = torch.clamp(action, min=-1.0, max=1.0)
 
     policy.global_timestep += policy.config["action_repeat"]
