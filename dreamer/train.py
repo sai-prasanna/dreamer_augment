@@ -73,7 +73,6 @@ def run_experiment():
         },
         callbacks=[WandbLoggerCallback(api_key="fd1a595a3c1caa35b1f907727fb99c479fcf59ae", project="augmented_dreams", entity='neuromancers')]
     )
-    return analysis.best_config
 
 if __name__ == "__main__":
     run_experiment()
