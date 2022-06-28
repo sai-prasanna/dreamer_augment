@@ -41,7 +41,7 @@ def run_experiment():
     register_env("finger_spin", lambda x: finger_spin())
 
     def timesteps_based_on_env(spec):
-        if spec.config.env == "finger_spin":
+        if spec.config.env == "finger_spin" or spec.config.env=="cheetah":
             return 500000
         elif spec.config.env == "hopper":
             return 1000000
@@ -50,26 +50,24 @@ def run_experiment():
     analysis = tune.run(
         DREAMERTrainer,
         name="dmc-dreamer",
-        stop={"timesteps_total": tune.sample_from(timesteps_based_on_env)},
+        stop={"timesteps_total": 500000},
         local_dir=os.path.join(os.getcwd(), "dmc"),
         checkpoint_at_end=True,
         #restore="/Users/kfarid/PycharmProjects/hyperdreamer/dmc/dmc-dreamer/DREAMER_cheetah_run-v20_beca2_00000_0_2021-08-13_18-37-27/checkpoint_26/checkpoint-26",
         num_samples=1,
         config={
-            "seed": 42,
+            "seed": tune.grid_search([42, 1337]),
             "batch_size": 64,
             "framework": "torch",
             "num_gpus": 1,
             "num_workers": 0,
-            "min_train_iters": tune.grid_search([100, 10]),
-            "max_train_iters": tune.sample_from(lambda spec: 100 if spec.config.min_train_iters == 100 else 500),
-            "train_iters_per_episode": 1,
-            "env": tune.grid_search(["finger_spin", "hopper"]),
+            #"min_train_iters": 10,#tune.grid_search([100, 10]),
+            #"max_train_iters": 500,#tune.sample_from(lambda spec: 100 if spec.config.min_train_iters == 100 else 500),
+            #"train_iters_per_rollout": 1,
+            "env": tune.grid_search(["finger_spin", "cheetah"]),
             "dreamer_model": tune.grid_search([
                 {"augment": {"type": "RandShiftsAug", "params": {"consistent": True}, "augmented_target": False}},
-                {"augment": {"type": "RandShiftsAug", "params": {"consistent": True}, "augmented_target": True}},
                 {"augment": {"type": "RandShiftsAug", "params": {"consistent": False}, "augmented_target": False}},
-                {"augment": {"type": "RandShiftsAug", "params": {"consistent": False}, "augmented_target": True}},
                 {"augment": None},
             ])
         },

@@ -36,11 +36,11 @@ DEFAULT_CONFIG = with_common_config({
     # Clipping is done inherently via policy tanh.
     "clip_actions": False,
     # Training iterations per data collection from real env
-    "min_train_iters": 100,
-    "max_train_iters": 100,
-    "train_iters_per_episode": 100,
+    "min_train_iters": 200,
+    "max_train_iters": 200,
+    "train_iters_per_rollout": 1,
     # Normalize observations
-    "normalize": False,
+    "normalize": True,
     # Horizon for Enviornment (1000 for Mujoco/DMC)
     "horizon": 1000,
     # Number of episodes to sample for Loss Calculation
@@ -61,8 +61,8 @@ DEFAULT_CONFIG = with_common_config({
     "prefill_timesteps": 5000,
     # This should be kept at 1 to preserve sample efficiency
     "num_envs_per_worker": 1,
-    # Exploration Gaussian
-    "explore_noise": 0.3,
+    # Exploration Greedy
+    "explore_noise": 0.0,
     # Batch mode
     "batch_mode": "complete_episodes",
     # Custom Model
@@ -159,7 +159,7 @@ def total_sampled_timesteps(worker):
 
 class DreamerIteration:
     def __init__(
-        self, worker, episode_buffer, min_train_iters, max_train_iters, train_iters_per_episode, batch_size, act_repeat
+        self, worker, episode_buffer, min_train_iters, max_train_iters, train_iters_per_rollout, batch_size, act_repeat
     ):
         self.worker = worker
         self.episode_buffer = episode_buffer
@@ -168,17 +168,16 @@ class DreamerIteration:
         # Scheduling the dreamer updates
         self.min_train_iters = min_train_iters
         self.max_train_iters = max_train_iters
-        self.train_iters_per_episode = train_iters_per_episode
-
-
+        self.train_iters_per_rollout = train_iters_per_rollout
 
     def __call__(self, samples):
-        num_iterations = min(max(self.episode_buffer.total_episodes * self.train_iters_per_episode, self.min_train_iters), self.max_train_iters)
+        n_rollouts = self.episode_buffer.timesteps // samples.count
+        num_iterations = min(max(n_rollouts * self.train_iters_per_rollout, self.min_train_iters), self.max_train_iters)
         # Dreamer training loop.
         for n in range(num_iterations):
             #print(f"sub-iteration={n}/{self.dreamer_train_iters}")
             batch = self.episode_buffer.sample(self.batch_size)
-            # if n == self.dreamer_train_iters - 1:
+            # if n == num_iterations - 1:
             #     batch["log_gif"] = True
             fetches = self.worker.learn_on_batch(batch)
 
@@ -268,7 +267,7 @@ class DREAMERTrainer(Trainer):
                 episode_buffer,
                 config["min_train_iters"],
                 config["max_train_iters"],
-                config["train_iters_per_episode"],
+                config["train_iters_per_rollout"],
                 batch_size,
                 act_repeat,
             )
