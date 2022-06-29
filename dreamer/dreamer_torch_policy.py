@@ -62,9 +62,6 @@ def compute_dreamer_loss(
     )
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    # Normalize
-    if normalize: 
-        obs = (obs / 255) - 0.5
 
     # PlaNET Model Loss
     if model.augment:
@@ -76,7 +73,11 @@ def compute_dreamer_loss(
     else:
         obs_aug = obs
         obs_target = obs
-    
+
+    if normalize:
+        obs_aug = (obs_aug / 255.0) - 0.5
+        obs_target = (obs_target / 255.0) - 0.5
+
     latent = model.encoder(obs_aug)
     post, prior = model.dynamics.observe(latent, action)
     features = model.dynamics.get_feature(post)

@@ -62,7 +62,7 @@ DEFAULT_CONFIG = with_common_config({
     # This should be kept at 1 to preserve sample efficiency
     "num_envs_per_worker": 1,
     # Exploration Greedy
-    "explore_noise": 0.0,
+    "explore_noise": 0.3,
     # Batch mode
     "batch_mode": "complete_episodes",
     # Custom Model

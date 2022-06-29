@@ -6,12 +6,12 @@ from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
 from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.framework import TensorType
 
-from dreamer.augmentation import RandomShiftsAug
+from dreamer.augmentation import RandomShiftsAug, TrivialAugment
 
 torch, nn = try_import_torch()
 if torch:
     from torch import distributions as td
-    from ray.rllib.agents.dreamer.utils import (
+    from dreamer.utils import (
         Linear,
         Conv2d,
         ConvTranspose2d,
@@ -479,9 +479,11 @@ class DreamerModel(TorchModelV2, nn.Module):
         if model_config["augment"]:
             if model_config["augment"]["type"] == "RandShiftsAug":
                 klass = RandomShiftsAug
+            elif model_config["augment"]["type"] == "TrivialAugment":
+                klass = TrivialAugment
             else:
                 raise ValueError("Invalid augmentation")
-            self.augment = klass(**model_config["augment"]["params"])
+            self.augment = klass(**(model_config["augment"]["params"] or {}))
             self.augmented_target = model_config["augment"]["augmented_target"]
         self.encoder = ConvEncoder(self.depth)
         self.decoder = ConvDecoder(self.stoch_size + self.deter_size, depth=self.depth)
