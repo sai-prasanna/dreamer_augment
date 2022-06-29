@@ -3,6 +3,7 @@ from ray.rllib.utils.framework import try_import_torch
 torch, nn = try_import_torch()
 if torch:
     import torch.nn.functional as F
+    from torchvision.transforms import TrivialAugmentWide
 
 class RandomShiftsAug(nn.Module):
     def __init__(self, pad=4, consistent = False):
@@ -68,3 +69,20 @@ class RandomShiftsAug(nn.Module):
             return samples
 
         return samples
+
+class TrivialAugment(nn.Module):
+    
+    def __init__(self) -> None:
+        super().__init__()
+        self.augment = TrivialAugmentWide()
+    
+    def forward(self, x):
+        orig_size = x.size()
+        if x.type != torch.uint8:
+            x = x.type(torch.uint8)
+        if len(orig_size) > 4:
+            x = x.view((-1, *x.size()[2:]))
+        x = self.augment(x)
+        if len(orig_size) > 4:
+            x = x.view(orig_size)
+        return x
