@@ -39,8 +39,6 @@ DEFAULT_CONFIG = with_common_config({
     "min_train_iters": 200,
     "max_train_iters": 200,
     "train_iters_per_rollout": 1,
-    # Normalize observations
-    "normalize": True,
     # Horizon for Enviornment (1000 for Mujoco/DMC)
     "horizon": 1000,
     # Number of episodes to sample for Loss Calculation
@@ -177,7 +175,7 @@ class DreamerIteration:
         for n in range(num_iterations):
             #print(f"sub-iteration={n}/{self.dreamer_train_iters}")
             batch = self.episode_buffer.sample(self.batch_size)
-            # if n == num_iterations - 1:
+            # if n == num_iterations - 1 and n_rollouts % 10 == 0:
             #     batch["log_gif"] = True
             fetches = self.worker.learn_on_batch(batch)
 

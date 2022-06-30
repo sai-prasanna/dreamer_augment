@@ -35,7 +35,6 @@ def compute_dreamer_loss(
     lambda_=0.95,
     kl_coeff=1.0,
     kl_balance=0.8,
-    normalize=False,
     log=False,
 ):
     """Constructs loss for the Dreamer objective
@@ -73,10 +72,6 @@ def compute_dreamer_loss(
     else:
         obs_aug = obs
         obs_target = obs
-
-    if normalize:
-        obs_aug = (obs_aug / 255.0) - 0.5
-        obs_target = (obs_target / 255.0) - 0.5
 
     latent = model.encoder(obs_aug)
     post, prior = model.dynamics.observe(latent, action)
@@ -198,7 +193,6 @@ def dreamer_loss(policy, model, dist_class, train_batch):
         policy.config["lambda"],
         policy.config["kl_coeff"],
         policy.config["kl_balance"],
-        policy.config["normalize"],
         log_gif,
     )
 
