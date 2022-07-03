@@ -13,7 +13,8 @@ from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.torch_utils import apply_grad_clipping
 from ray.rllib.utils.typing import AgentID
 
-from dreamer.dreamer_model import DreamerModel, RandomShiftsAug
+from dreamer.dreamer_model import DreamerModel, RandomShiftsAug,FeatureTripletBuilder, distance
+
 import dreamer
 from dreamer.utils import FreezeParameters
 
@@ -76,6 +77,13 @@ def compute_dreamer_loss(
     latent = model.encoder(obs_aug)
     post, prior = model.dynamics.observe(latent, action)
     features = model.dynamics.get_feature(post)
+    #Compute tripet loss
+    if model.triplet:
+        obs_aug_2 = model.augment(obs).contiguous()
+        latent_2 = model.encoder(obs_aug_2)
+        post_2, prior_2 = model.dynamics.observe(latent_2, action)
+        features_2 = model.dynamics.get_feature(post_2)
+        triplet_loss =compute_triplet_loss(features,features_2)
     image_pred = model.decoder(features)
     reward_pred = model.reward(features)
     image_loss = -torch.mean(image_pred.log_prob(obs_target))
@@ -94,7 +102,10 @@ def compute_dreamer_loss(
     div = torch.mean(
         torch.distributions.kl_divergence(post_dist, prior_dist).sum(dim=2)
     )
-    model_loss = kl_coeff * div + reward_loss + image_loss
+    if model.triplet:
+        model_loss = kl_coeff * div + reward_loss + image_loss + triplet_loss
+    else:
+        model_loss = kl_coeff * div + reward_loss + image_loss
 
     # Actor Loss
     # [imagine_horizon, batch_length*batch_size, feature_size]
@@ -144,7 +155,18 @@ def compute_dreamer_loss(
         return_dict["log_gif"] = log_gif
     return return_dict
 
+def compute_triplet_loss(feature1, feature2,loss_margin = 2, negative_frame_margin=10):
+    
+    tripletBuilder = FeatureTripletBuilder(feature1,feature2,negative_frame_margin=negative_frame_margin)
 
+    anchor_frames, positive_frames, negative_frames = tripletBuilder.build_set()
+
+    d_positive = distance(anchor_frames, positive_frames)
+    d_negative = distance(anchor_frames, negative_frames)
+    loss_triplet = torch.clamp(loss_margin + d_positive - d_negative, min=0.0).mean()
+
+    return loss_triplet
+    
 # Similar to GAE-Lambda, calculate value targets
 def lambda_return(reward, value, pcont, bootstrap, lambda_):
     def agg_fn(x, y):

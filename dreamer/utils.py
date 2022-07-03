@@ -86,3 +86,42 @@ class FreezeParameters:
     def __exit__(self, exc_type, exc_val, exc_tb):
         for i, param in enumerate(self.parameters):
             param.requires_grad = self.param_states[i]
+
+class FeatureTripletBuilder(object):
+    def __init__(self,feature_1,feature_2,negative_frame_margin=10):
+        # The negative example has to be from outside the buffer window. Taken from both sides of
+        # ihe frame.
+        self.negative_frame_margin = negative_frame_margin      
+        self.anchor = feature_1.view(-1,feature_1.shape[2])
+        self.positive = feature_2.view(-1,feature_2.shape[2])
+        self.frame_lengths = self.anchor.shape[0]
+        self.negatives = torch.Tensor(self.anchor.shape[0],self.anchor.shape[1]).cuda()
+
+    def sample_negative(self,anchor_index):
+        negative_index = self.sample_negative_frame_index(anchor_index)
+        negative_frame = self.positive[negative_index,:]
+        return negative_frame
+
+    def build_set(self):
+        for i in range(0, self.anchor.shape[0]):
+            self.negatives[i,:] =  self.sample_negative(i)
+
+        return (self.anchor, self.positive,
+            self.negatives)
+
+    def negative_frame_indices(self, anchor_index):
+        video_length = self.frame_lengths
+        lower_bound = 0
+        upper_bound = max(0, anchor_index - self.negative_frame_margin)
+        range1 = np.arange(lower_bound, upper_bound)
+        lower_bound = min(anchor_index + self.negative_frame_margin, video_length)      
+        upper_bound = video_length
+        range2 = np.arange(lower_bound, upper_bound)      
+        return np.concatenate([range1, range2])
+
+    def sample_negative_frame_index(self, anchor_index):
+        return np.random.choice(self.negative_frame_indices(anchor_index))
+
+def distance(x1, x2):
+    diff = torch.abs(x1 - x2)
+    return torch.pow(diff, 2).sum(dim=1)

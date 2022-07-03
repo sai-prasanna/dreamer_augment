@@ -490,6 +490,9 @@ class DreamerModel(TorchModelV2, nn.Module):
         self.reward = DenseDecoder(
             self.stoch_size + self.deter_size, 1, 2, self.hidden_size
         )
+        self.triplet = None
+        if model_config["triplet"]:
+            self.triplet = True
         self.dynamics = RSSM(
             self.action_size,
             32 * self.depth,

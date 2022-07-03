@@ -83,6 +83,7 @@ DEFAULT_CONFIG = with_common_config({
             },
             "augmented_target": False
         },
+        "triplet":False,
     },
     "env_config": {
         # Repeats action send by policy for frame_skip times in env

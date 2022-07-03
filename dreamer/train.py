@@ -69,6 +69,7 @@ def run_experiment():
                 {"augment": {"type": "RandShiftsAug", "params": {"consistent": True}, "augmented_target": False}},
                 {"augment": {"type": "RandShiftsAug", "params": {"consistent": False}, "augmented_target": False}},
                 {"augment": None},
+                {"triplet": True},
             ])
         },
         callbacks=[WandbLoggerCallback(api_key="fd1a595a3c1caa35b1f907727fb99c479fcf59ae", project="augmented_dreams", entity='neuromancers')]
