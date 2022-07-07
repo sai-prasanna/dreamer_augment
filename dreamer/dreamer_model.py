@@ -6,7 +6,7 @@ from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
 from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.framework import TensorType
 
-from dreamer.augmentation import RandomShiftsAug, TrivialAugment
+from dreamer.augmentation import Augmentation
 
 torch, nn = try_import_torch()
 if torch:
@@ -477,10 +477,8 @@ class DreamerModel(TorchModelV2, nn.Module):
 
         self.augment = None
         if model_config["augment"]:
-            if model_config["augment"]["type"] == "RandShiftsAug":
-                klass = RandomShiftsAug
-            elif model_config["augment"]["type"] == "TrivialAugment":
-                klass = TrivialAugment
+            if model_config["augment"]["type"] == "Augmentation":
+                klass = Augmentation
             else:
                 raise ValueError("Invalid augmentation")
             self.augment = klass(**(model_config["augment"]["params"] or {}))
@@ -490,9 +488,7 @@ class DreamerModel(TorchModelV2, nn.Module):
         self.reward = DenseDecoder(
             self.stoch_size + self.deter_size, 1, 2, self.hidden_size
         )
-        self.triplet = None
-        if model_config["triplet"]:
-            self.triplet = True
+        self.contrastive_loss = model_config["contrastive_loss"]
         self.dynamics = RSSM(
             self.action_size,
             32 * self.depth,

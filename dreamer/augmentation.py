@@ -1,9 +1,52 @@
+from functools import partial
 from ray.rllib.utils.framework import try_import_torch
 
 torch, nn = try_import_torch()
 if torch:
     import torch.nn.functional as F
-    from torchvision.transforms import TrivialAugmentWide
+    from torch import Tensor
+    import kornia.augmentation as K
+    import torch
+
+
+class Augmentation(torch.nn.Module):
+    def __init__(
+        self,
+        strong: bool,
+        consistent: bool,
+        pad: int = 4,
+        image_size: int = 64
+    ) -> None:
+        super().__init__()
+        self.random_crop = K.VideoSequential(
+            K.RandomCrop((image_size, image_size), padding=pad, padding_mode='replicate'))
+        self.strong_transform = None
+        if strong:
+            self.strong_transform = [
+                K.RandomRotation(5, p=1/8),
+                K.RandomSharpness((0, 1.0), p=1/8),
+                K.RandomPosterize((3, 8), p=1/8),
+                K.RandomSolarize(0.1, p=1/8),
+                K.RandomEqualize(p=1/8),
+                K.ColorJiggle(brightness=(0.4, 1.4), p=1/8),
+                K.ColorJiggle(saturation=(0.4, 1.4), p=1/8),
+                K.ColorJiggle(contrast=(0.4, 1.4), p=1/8),
+            ]
+            # Strong augmentations are always consistent across timesteps
+            self.strong_transfom_fn = K.VideoSequential(*self.strong_transform, same_on_frame=True)
+        self.consistent_crop = consistent
+
+    def forward(self, X: Tensor) -> Tensor:
+        X = (X + 0.5) * 255.0
+        orig_shape = X.shape
+        if self.consistent_crop:
+            X = self.random_crop(X.view(orig_shape[0], 1, orig_shape[1]*orig_shape[2], *orig_shape[3:])).view(orig_shape)
+        else:
+            X = self.random_crop(X)
+        if self.strong_transform:
+            X = self.strong_transfom_fn(X)
+        X = (X / 255.0) - 0.5
+        return X
 
 class RandomShiftsAug(nn.Module):
     def __init__(self, pad=4, consistent = False):
@@ -69,20 +112,3 @@ class RandomShiftsAug(nn.Module):
             return samples
 
         return samples
-
-class TrivialAugment(nn.Module):
-    
-    def __init__(self) -> None:
-        super().__init__()
-        self.augment = TrivialAugmentWide()
-    
-    def forward(self, x):
-        orig_size = x.size()
-        if x.type != torch.uint8:
-            x = x.type(torch.uint8)
-        if len(orig_size) > 4:
-            x = x.view((-1, *x.size()[2:]))
-        x = self.augment(x)
-        if len(orig_size) > 4:
-            x = x.view(orig_size)
-        return x

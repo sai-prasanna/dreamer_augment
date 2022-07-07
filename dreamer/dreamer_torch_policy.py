@@ -13,7 +13,8 @@ from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.torch_utils import apply_grad_clipping
 from ray.rllib.utils.typing import AgentID
 
-from dreamer.dreamer_model import DreamerModel, RandomShiftsAug,FeatureTripletBuilder, distance
+from dreamer.dreamer_model import DreamerModel
+from dreamer.utils import FeatureTripletBuilder, distance
 
 import dreamer
 from dreamer.utils import FreezeParameters
@@ -78,13 +79,15 @@ def compute_dreamer_loss(
     post, prior = model.dynamics.observe(latent, action)
     features = model.dynamics.get_feature(post)
     #Compute tripet loss
-    if model.triplet:
+    if model.contrastive_loss == "triplet":
+        assert model.augment
         obs_aug_2 = model.augment(obs).contiguous()
         latent_2 = model.encoder(obs_aug_2)
-        post_2, prior_2 = model.dynamics.observe(latent_2, action)
+        post_2, _ = model.dynamics.observe(latent_2, action)
         features_2 = model.dynamics.get_feature(post_2)
-        triplet_loss =compute_triplet_loss(features,features_2)
-    image_pred = model.decoder(features)
+        contrastive_loss = compute_triplet_loss(features, features_2)
+    # Don't use decoder to train the state representations when using contrastive
+    image_pred = model.decoder(features.detach() if model.contrastive_loss else features)
     reward_pred = model.reward(features)
     image_loss = -torch.mean(image_pred.log_prob(obs_target))
     reward_loss = -torch.mean(reward_pred.log_prob(reward))
@@ -102,8 +105,8 @@ def compute_dreamer_loss(
     div = torch.mean(
         torch.distributions.kl_divergence(post_dist, prior_dist).sum(dim=2)
     )
-    if model.triplet:
-        model_loss = kl_coeff * div + reward_loss + image_loss + triplet_loss
+    if model.contrastive_loss:
+        model_loss = kl_coeff * div + reward_loss + image_loss + contrastive_loss
     else:
         model_loss = kl_coeff * div + reward_loss + image_loss
 
@@ -155,9 +158,9 @@ def compute_dreamer_loss(
         return_dict["log_gif"] = log_gif
     return return_dict
 
-def compute_triplet_loss(feature1, feature2,loss_margin = 2, negative_frame_margin=10):
+def compute_triplet_loss(feature1, feature2, loss_margin=2, negative_frame_margin=10):
     
-    tripletBuilder = FeatureTripletBuilder(feature1,feature2,negative_frame_margin=negative_frame_margin)
+    tripletBuilder = FeatureTripletBuilder(feature1, feature2, negative_frame_margin=negative_frame_margin)
 
     anchor_frames, positive_frames, negative_frames = tripletBuilder.build_set()
 

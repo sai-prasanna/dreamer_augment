@@ -76,14 +76,16 @@ DEFAULT_CONFIG = with_common_config({
         # Action STD
         "action_init_std": 5.0,
         "augment": {
-            "type": "RandShiftAug", # No augmentation
+            "type": "Augmentation",
             "params": {
+                "strong": False,
                 "pad": 4,
-                "consistent": True
+                "consistent": True,
+                "image_size": 64
             },
             "augmented_target": False
         },
-        "triplet":False,
+        "contrastive_loss": ""
     },
     "env_config": {
         # Repeats action send by policy for frame_skip times in env
