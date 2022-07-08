@@ -39,13 +39,16 @@ class Augmentation(torch.nn.Module):
     def forward(self, X: Tensor) -> Tensor:
         X = (X + 0.5) * 255.0
         orig_shape = X.shape
+        if len(orig_shape) == 4:
+            print("STUPID RLLIB TEST USELESS - NOT AUGMENTING")
+            return X
         if self.consistent_crop:
             X = self.random_crop(X.view(orig_shape[0], 1, orig_shape[1]*orig_shape[2], *orig_shape[3:])).view(orig_shape)
         else:
             X = self.random_crop(X)
         if self.strong_transform:
-            X = self.strong_transfom_fn(X)
-        X = (X / 255.0) - 0.5
+            X = self.strong_transfom_fn(X / 255.0)
+        X = X - 0.5
         return X
 
 class RandomShiftsAug(nn.Module):

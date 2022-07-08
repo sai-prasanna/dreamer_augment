@@ -153,6 +153,8 @@ def compute_dreamer_loss(
         "prior_ent": prior_ent,
         "post_ent": post_ent,
     }
+    if model.contrastive_loss:
+        return_dict["contrastive_loss"] = contrastive_loss
 
     if log_gif is not None:
         return_dict["log_gif"] = log_gif

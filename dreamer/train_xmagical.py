@@ -67,7 +67,9 @@ class XMagical(gym.Wrapper):
 
 def run_experiment():
     """Example for using a WandbLoggerCallback with the function API"""
-    register_env("xmagical", lambda x: XMagical("SweepToTop", "Longstick", "Pixels", "Allo", "Demo", True, 500))
+    register_env("xmagical-Longstick", lambda x: XMagical("SweepToTop", "Longstick", "Pixels", "Allo", "Demo", True, 500))
+    register_env("xmagical-Shortstick", lambda x: XMagical("SweepToTop", "Shortstick", "Pixels", "Allo", "Demo", True, 500))
+    register_env("xmagical-Mediumstick", lambda x: XMagical("SweepToTop", "Mediumstick", "Pixels", "Allo", "Demo", True, 500))
 
     analysis = tune.run(
         DREAMERTrainer,
@@ -82,20 +84,17 @@ def run_experiment():
             "framework": "torch",
             "num_gpus": 1,
             "num_workers": 0,
-            "env": "xmagical",
+            "env": "xmagical-Mediumstick",
             "dreamer_model": {"augment": None},
             "env_config": {"frame_skip": 1},
             "horizon": 500,
-            "normalize": True,
             "actor_lr": 1e-4,
             # Critic LR
             "critic_lr": 1e-4,
             "explore_noise": 0.0
-
         },
         callbacks=[WandbLoggerCallback(api_key="fd1a595a3c1caa35b1f907727fb99c479fcf59ae", project="augmented_dreams", entity='neuromancers')]
     )
-    return analysis.best_config
 
 if __name__ == "__main__":
     run_experiment()
