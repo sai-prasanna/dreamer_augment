@@ -14,7 +14,7 @@ from ray.rllib.utils.torch_utils import apply_grad_clipping
 from ray.rllib.utils.typing import AgentID
 
 from dreamer.dreamer_model import DreamerModel
-from dreamer.utils import FeatureTripletBuilder, distance
+from dreamer.utils import BarlowTwins, FeatureTripletBuilder, distance
 
 import dreamer
 from dreamer.utils import FreezeParameters
@@ -86,6 +86,14 @@ def compute_dreamer_loss(
         post_2, _ = model.dynamics.observe(latent_2, action)
         features_2 = model.dynamics.get_feature(post_2)
         contrastive_loss = compute_triplet_loss(features, features_2)
+    #Compute barlow twins loss
+    elif model.contrastive_loss =="barlow_twins":
+        assert model.augment
+        obs_aug_2 = model.augment(obs).contiguous()
+        latent_2 = model.encoder(obs_aug_2)
+        post_2, _ = model.dynamics.observe(latent_2, action)
+        features_2 = model.dynamics.get_feature(post_2)
+        contrastive_loss = compute_barlow_twins_loss(features,features_2)
     # Don't use decoder to train the state representations when using contrastive
     image_pred = model.decoder(features.detach() if model.contrastive_loss else features)
     reward_pred = model.reward(features)
@@ -171,6 +179,15 @@ def compute_triplet_loss(feature1, feature2, loss_margin=2, negative_frame_margi
     loss_triplet = torch.clamp(loss_margin + d_positive - d_negative, min=0.0).mean()
 
     return loss_triplet
+
+def compute_barlow_twins_loss(feature1, feature2,lambd=0.0051):
+
+    feature1 = feature1.view(-1,feature1.shape[2])
+    feature2 = feature2.view(-1,feature2.shape[2])
+    bt = BarlowTwins(feature1.shape[0],feature1.shape[1],lambd).cuda()
+    loss = bt.forward(feature1,feature2)
+    return loss
+
     
 # Similar to GAE-Lambda, calculate value targets
 def lambda_return(reward, value, pcont, bootstrap, lambda_):
