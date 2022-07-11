@@ -32,11 +32,11 @@ def run_experiment():
         DREAMERTrainer,
         name="dmc-dreamer",
         stop={"timesteps_total": 100000},
-        local_dir=os.path.join(os.getcwd(), "dmc"),
+        local_dir=os.path.join("/data/ramans", "dmc"),
         checkpoint_at_end=True,
         num_samples=1,
         config={
-            "seed": 42,
+            "seed": tune.grid_search([42, 1337, 13]),
             "batch_size": 64,
             "framework": "torch",
             "num_gpus": 1,
@@ -44,10 +44,10 @@ def run_experiment():
             "min_train_iters": 100,
             "max_train_iters": 100,
             #"train_iters_per_rollout": 1,
-            "env": "cheetah",
+            "env": tune.grid_search(["finger_spin", "cheetah"]),
             "dreamer_model": {
                 "contrastive_loss": "triplet",
-                "augment": {"type": "Augmentation", "params": {"consistent": True, "strong": True}, "augmented_target": False}},
+                "augment": {"type": "Augmentation", "params": {"consistent": False, "strong": tune.grid_search([True, False])}, "augmented_target": False}},
         },
         callbacks=[WandbLoggerCallback(api_key="fd1a595a3c1caa35b1f907727fb99c479fcf59ae", project="augmented_dreams", entity='neuromancers')]
     )
