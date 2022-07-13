@@ -1,9 +1,7 @@
 import logging
-
-import numpy as np
 from typing import Dict, Optional
 
-import ray
+import numpy as np
 from ray.rllib.evaluation.episode import Episode
 from ray.rllib.models.catalog import ModelCatalog
 from ray.rllib.policy.policy import Policy
@@ -13,10 +11,9 @@ from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.torch_utils import apply_grad_clipping
 from ray.rllib.utils.typing import AgentID
 
-from dreamer.dreamer_model import DreamerModel
-from dreamer.utils import BarlowTwins, FeatureTripletBuilder, distance
-
 import dreamer
+from dreamer.dreamer_model import DreamerModel
+from dreamer.utils import BarlowTwins, FeatureTripletBuilder, distance, compute_cpc_loss
 from dreamer.utils import FreezeParameters
 
 torch, nn = try_import_torch()
@@ -28,16 +25,18 @@ logger = logging.getLogger(__name__)
 
 # This is the computation graph for workers (inner adaptation steps)
 def compute_dreamer_loss(
-    obs,
-    action,
-    reward,
-    model: DreamerModel,
-    imagine_horizon: int,
-    discount=0.99,
-    lambda_=0.95,
-    kl_coeff=1.0,
-    kl_balance=0.8,
-    log=False,
+        obs,
+        action,
+        reward,
+        model: DreamerModel,
+        imagine_horizon: int,
+        discount=0.99,
+        lambda_=0.95,
+        kl_coeff=1.0,
+        kl_balance=0.8,
+        cpc_batch_amount=10,
+        cpc_time_amount=30,
+        log=False,
 ):
     """Constructs loss for the Dreamer objective
 
@@ -50,7 +49,9 @@ def compute_dreamer_loss(
         discount (float): Discount
         lambda_ (float): Lambda, like in GAE
         kl_coeff (float): KL Coefficient for Divergence loss in model loss
-        free_nats (float): Threshold for minimum divergence in model loss
+        kl_balance (float): ratio to balance between the rhs and lhs in kl div.
+        cpc_batch_amount (int): window of batches to look for negative samples for cpc loss
+        cpc_time_amount (int): window of times to look for negative samples for cpc loss
         log (bool): If log, generate gifs
     """
     encoder_weights = list(model.encoder.parameters())
@@ -63,6 +64,7 @@ def compute_dreamer_loss(
     )
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    cpc_amount = (cpc_batch_amount, cpc_time_amount)
 
     # PlaNET Model Loss
     if model.augment:
@@ -78,7 +80,7 @@ def compute_dreamer_loss(
     latent = model.encoder(obs_aug)
     post, prior = model.dynamics.observe(latent, action)
     features = model.dynamics.get_feature(post)
-    #Compute tripet loss
+    # Compute tripet loss
     if model.contrastive_loss == "triplet":
         assert model.augment
         obs_aug_2 = model.augment(obs).contiguous()
@@ -86,30 +88,52 @@ def compute_dreamer_loss(
         post_2, _ = model.dynamics.observe(latent_2, action)
         features_2 = model.dynamics.get_feature(post_2)
         contrastive_loss = compute_triplet_loss(features, features_2)
-    #Compute barlow twins loss
-    elif model.contrastive_loss =="barlow_twins":
+    # Compute barlow twins loss
+    elif model.contrastive_loss == "barlow_twins":
         assert model.augment
         obs_aug_2 = model.augment(obs).contiguous()
         latent_2 = model.encoder(obs_aug_2)
         post_2, _ = model.dynamics.observe(latent_2, action)
         features_2 = model.dynamics.get_feature(post_2)
-        contrastive_loss = compute_barlow_twins_loss(features,features_2)
+        contrastive_loss = compute_barlow_twins_loss(features, features_2)
+
+    elif model.contrastive_loss == 'cpc':
+
+        state_preds = model.state_model(model.encoder(obs))
+        contrastive_loss = compute_cpc_loss(state_preds, features, cpc_amount)
+        contrastive_loss = contrastive_loss.mean()
+
+    elif model.contrastive_loss == "cpc_augment":
+        assert model.augment
+        state_preds = model.state_model(latent)
+
+        latent_noaug = model.encoder(obs)
+        state_preds_noaug = model.state_model(latent_noaug)
+        post_noaug, _ = model.dynamics.observe(latent_noaug, action)
+        features_noaug = model.dynamics.get_feature(post_noaug)
+
+        contrastive_loss = compute_cpc_loss(state_preds_noaug, features, cpc_amount)
+        contrastive_loss += compute_cpc_loss(state_preds, features, cpc_amount)
+        contrastive_loss += compute_cpc_loss(state_preds_noaug, features_noaug, cpc_amount)
+        contrastive_loss += compute_cpc_loss(state_preds, features_noaug, cpc_amount)
+        contrastive_loss = contrastive_loss.mean()
+
     # Don't use decoder to train the state representations when using contrastive
     image_pred = model.decoder(features.detach() if model.contrastive_loss else features)
     reward_pred = model.reward(features)
     image_loss = -torch.mean(image_pred.log_prob(obs_target))
     reward_loss = -torch.mean(reward_pred.log_prob(reward))
-    #prior_dist = model.dynamics.get_dist(prior[0], prior[1])
-    #post_dist = model.dynamics.get_dist(post[0], post[1])
+    # prior_dist = model.dynamics.get_dist(prior[0], prior[1])
+    # post_dist = model.dynamics.get_dist(post[0], post[1])
     prior_dist = model.dynamics.get_dist(prior[0], prior[1])
     prior_dist_detached = model.dynamics.get_dist(prior[0].detach(), prior[1].detach())
     post_dist = model.dynamics.get_dist(post[0], post[1])
     post_dist_detached = model.dynamics.get_dist(post[0].detach(), post[1].detach())
     kl_lhs = torch.mean(
-        torch.distributions.kl_divergence(post_dist_detached, prior_dist))#.sum(dim=2))
+        torch.distributions.kl_divergence(post_dist_detached, prior_dist))  # .sum(dim=2))
     kl_rhs = torch.mean(
-        torch.distributions.kl_divergence(post_dist, prior_dist_detached))#.sum(dim=2))
-    div = kl_balance * kl_lhs + (1-kl_balance)*kl_rhs
+        torch.distributions.kl_divergence(post_dist, prior_dist_detached))  # .sum(dim=2))
+    div = kl_balance * kl_lhs + (1 - kl_balance) * kl_rhs
     div = torch.mean(
         torch.distributions.kl_divergence(post_dist, prior_dist).sum(dim=2)
     )
@@ -168,8 +192,8 @@ def compute_dreamer_loss(
         return_dict["log_gif"] = log_gif
     return return_dict
 
+
 def compute_triplet_loss(feature1, feature2, loss_margin=2, negative_frame_margin=10):
-    
     tripletBuilder = FeatureTripletBuilder(feature1, feature2, negative_frame_margin=negative_frame_margin)
 
     anchor_frames, positive_frames, negative_frames = tripletBuilder.build_set()
@@ -180,15 +204,15 @@ def compute_triplet_loss(feature1, feature2, loss_margin=2, negative_frame_margi
 
     return loss_triplet
 
-def compute_barlow_twins_loss(feature1, feature2,lambd=0.0051):
 
-    feature1 = feature1.view(-1,feature1.shape[2])
-    feature2 = feature2.view(-1,feature2.shape[2])
-    bt = BarlowTwins(feature1.shape[0],feature1.shape[1],lambd).cuda()
-    loss = bt.forward(feature1,feature2)
+def compute_barlow_twins_loss(feature1, feature2, lambd=0.0051):
+    feature1 = feature1.view(-1, feature1.shape[2])
+    feature2 = feature2.view(-1, feature2.shape[2])
+    bt = BarlowTwins(feature1.shape[0], feature1.shape[1], lambd).cuda()
+    loss = bt.forward(feature1, feature2)
     return loss
 
-    
+
 # Similar to GAE-Lambda, calculate value targets
 def lambda_return(reward, value, pcont, bootstrap, lambda_):
     def agg_fn(x, y):
@@ -237,7 +261,10 @@ def dreamer_loss(policy, model, dist_class, train_batch):
         policy.config["lambda"],
         policy.config["kl_coeff"],
         policy.config["kl_balance"],
+        policy.config["cpc_batch_amount"],
+        policy.config["cpc_time_amount"],
         log_gif,
+
     )
 
     loss_dict = policy.stats_dict
@@ -246,7 +273,6 @@ def dreamer_loss(policy, model, dist_class, train_batch):
 
 
 def build_dreamer_model(policy, obs_space, action_space, config):
-
     model = ModelCatalog.get_model_v2(
         obs_space,
         action_space,
@@ -313,10 +339,10 @@ def dreamer_optimizer_fn(policy, config):
 
 
 def preprocess_episode(
-    policy: Policy,
-    sample_batch: SampleBatch,
-    other_agent_batches: Optional[Dict[AgentID, SampleBatch]] = None,
-    episode: Optional[Episode] = None,
+        policy: Policy,
+        sample_batch: SampleBatch,
+        other_agent_batches: Optional[Dict[AgentID, SampleBatch]] = None,
+        episode: Optional[Episode] = None,
 ) -> SampleBatch:
     """Batch format should be in the form of (s_t, a_(t-1), r_(t-1))
     When t=0, the resetted obs is paired with action and reward of 0.

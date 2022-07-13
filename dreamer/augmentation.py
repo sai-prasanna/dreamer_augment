@@ -1,4 +1,3 @@
-from functools import partial
 from ray.rllib.utils.framework import try_import_torch
 
 torch, nn = try_import_torch()
@@ -11,11 +10,11 @@ if torch:
 
 class Augmentation(torch.nn.Module):
     def __init__(
-        self,
-        strong: bool,
-        consistent: bool,
-        pad: int = 4,
-        image_size: int = 64
+            self,
+            strong: bool,
+            consistent: bool,
+            pad: int = 4,
+            image_size: int = 64
     ) -> None:
         super().__init__()
         self.random_crop = K.VideoSequential(
@@ -23,14 +22,14 @@ class Augmentation(torch.nn.Module):
         self.strong_transform = None
         if strong:
             self.strong_transform = [
-                K.RandomRotation(5, p=1/8),
-                K.RandomSharpness((0, 1.0), p=1/8),
-                K.RandomPosterize((3, 8), p=1/8),
-                K.RandomSolarize(0.1, p=1/8),
-                K.RandomEqualize(p=1/8),
-                K.ColorJiggle(brightness=(0.4, 1.4), p=1/8),
-                K.ColorJiggle(saturation=(0.4, 1.4), p=1/8),
-                K.ColorJiggle(contrast=(0.4, 1.4), p=1/8),
+                K.RandomRotation(5, p=1 / 8),
+                K.RandomSharpness((0, 1.0), p=1 / 8),
+                K.RandomPosterize((3, 8), p=1 / 8),
+                K.RandomSolarize(0.1, p=1 / 8),
+                K.RandomEqualize(p=1 / 8),
+                K.ColorJiggle(brightness=(0.4, 1.4), p=1 / 8),
+                K.ColorJiggle(saturation=(0.4, 1.4), p=1 / 8),
+                K.ColorJiggle(contrast=(0.4, 1.4), p=1 / 8),
             ]
             # Strong augmentations are always consistent across timesteps
             self.strong_transfom_fn = K.VideoSequential(*self.strong_transform, same_on_frame=True)
@@ -43,7 +42,8 @@ class Augmentation(torch.nn.Module):
             print("STUPID RLLIB TEST USELESS - NOT AUGMENTING")
             return X
         if self.consistent_crop:
-            X = self.random_crop(X.view(orig_shape[0], 1, orig_shape[1]*orig_shape[2], *orig_shape[3:])).view(orig_shape)
+            X = self.random_crop(X.view(orig_shape[0], 1, orig_shape[1] * orig_shape[2], *orig_shape[3:])).view(
+                orig_shape)
         else:
             X = self.random_crop(X)
         if self.strong_transform:
@@ -51,8 +51,9 @@ class Augmentation(torch.nn.Module):
         X = X - 0.5
         return X
 
+
 class RandomShiftsAug(nn.Module):
-    def __init__(self, pad=4, consistent = False):
+    def __init__(self, pad=4, consistent=False):
         super().__init__()
         self.pad = pad
         self.consistent = consistent
@@ -68,7 +69,7 @@ class RandomShiftsAug(nn.Module):
 
         assert h == w
 
-        padding = tuple([self.pad] * 4 + [0, 0]) #len(x.size()))
+        padding = tuple([self.pad] * 4 + [0, 0])  # len(x.size()))
         x = F.pad(x, padding, 'replicate')
         eps = 1.0 / (h + 2 * self.pad)
         arange = torch.linspace(-1.0 + eps,
@@ -78,7 +79,8 @@ class RandomShiftsAug(nn.Module):
                                 dtype=x.dtype)[:h]
         arange = arange.unsqueeze(0).repeat(h, 1).unsqueeze(2)
         base_grid = torch.cat([arange, arange.transpose(1, 0)], dim=2)
-        base_grid =  base_grid[None, None, ...].repeat(t, n, 1, 1, 1)  if len(x.size()) > 4 else base_grid.unsqueeze(0).repeat(n, 1, 1, 1)
+        base_grid = base_grid[None, None, ...].repeat(t, n, 1, 1, 1) if len(x.size()) > 4 else base_grid.unsqueeze(
+            0).repeat(n, 1, 1, 1)
 
         if self.consistent:
             shift = torch.randint(0,
@@ -90,25 +92,23 @@ class RandomShiftsAug(nn.Module):
         else:
             shift = torch.randint(0,
                                   2 * self.pad + 1,
-                                  size= (t, n, 1, 1, 2) if len(orig_size)>4 else (n, 1, 1, 2),
+                                  size=(t, n, 1, 1, 2) if len(orig_size) > 4 else (n, 1, 1, 2),
                                   device=x.device,
                                   dtype=x.dtype)
-
-
 
         shift *= 2.0 / (h + 2 * self.pad)
 
         grid = base_grid + shift
-        if len(orig_size)>4:
+        if len(orig_size) > 4:
             x = x.view((-1, *x.size()[2:]))
             grid = grid.view((-1, *grid.size()[2:]))
 
         samples = F.grid_sample(x,
-                             grid,
-                             padding_mode='zeros',
-                             align_corners=False)
-        #samples = samples.view(orig_size)
-        if len(orig_size)>4:
+                                grid,
+                                padding_mode='zeros',
+                                align_corners=False)
+        # samples = samples.view(orig_size)
+        if len(orig_size) > 4:
             samples = samples.view(orig_size)
             samples = samples.permute(1, 0, 2, 3, 4)
         else:
