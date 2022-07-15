@@ -13,7 +13,7 @@ from ray.rllib.utils.typing import AgentID
 
 import dreamer
 from dreamer.dreamer_model import DreamerModel
-from dreamer.utils import BarlowTwins, FeatureTripletBuilder, distance, compute_cpc_loss
+from dreamer.utils import BarlowTwins, FeatureTripletBuilder, distance, compute_cpc_obj
 from dreamer.utils import FreezeParameters
 
 torch, nn = try_import_torch()
@@ -98,25 +98,29 @@ def compute_dreamer_loss(
         contrastive_loss = compute_barlow_twins_loss(features, features_2)
 
     elif model.contrastive_loss == 'cpc':
-
         state_preds = model.state_model(model.encoder(obs))
-        contrastive_loss = compute_cpc_loss(state_preds, features, cpc_amount)
-        contrastive_loss = contrastive_loss.mean()
+        if len(state_preds.mean.size()) < 3:
+            contrastive_loss = 0
+        else:
+            contrastive_obj = compute_cpc_obj(state_preds, features, cpc_amount)
+            contrastive_loss = -contrastive_obj.mean()
 
     elif model.contrastive_loss == "cpc_augment":
         assert model.augment
         state_preds = model.state_model(latent)
+        if len(state_preds.mean.size()) < 3:
+            contrastive_loss = 0
+        else:
+            latent_noaug = model.encoder(obs)
+            state_preds_noaug = model.state_model(latent_noaug)
+            post_noaug, _ = model.dynamics.observe(latent_noaug, action)
+            features_noaug = model.dynamics.get_feature(post_noaug)
 
-        latent_noaug = model.encoder(obs)
-        state_preds_noaug = model.state_model(latent_noaug)
-        post_noaug, _ = model.dynamics.observe(latent_noaug, action)
-        features_noaug = model.dynamics.get_feature(post_noaug)
-
-        contrastive_loss = compute_cpc_loss(state_preds_noaug, features, cpc_amount)
-        contrastive_loss += compute_cpc_loss(state_preds, features, cpc_amount)
-        contrastive_loss += compute_cpc_loss(state_preds_noaug, features_noaug, cpc_amount)
-        contrastive_loss += compute_cpc_loss(state_preds, features_noaug, cpc_amount)
-        contrastive_loss = contrastive_loss.mean()
+            contrastive_obj = compute_cpc_obj(state_preds_noaug, features, cpc_amount)
+            contrastive_obj += compute_cpc_obj(state_preds, features, cpc_amount)
+            contrastive_obj += compute_cpc_obj(state_preds_noaug, features_noaug, cpc_amount)
+            contrastive_obj += compute_cpc_obj(state_preds, features_noaug, cpc_amount)
+            contrastive_loss = -contrastive_obj.mean()
 
     # Don't use decoder to train the state representations when using contrastive
     image_pred = model.decoder(features.detach() if model.contrastive_loss else features)

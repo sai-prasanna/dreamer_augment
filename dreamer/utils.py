@@ -163,7 +163,7 @@ class BarlowTwins(nn.Module):
         return loss
 
 
-def compute_cpc_loss(pred, features, cpc_contrast, cpc_amount):
+def compute_cpc_obj(pred, features, cpc_amount=(10, 30), cpc_contrast='window'):
 
     batch_size, batch_len = features.size(0), features.size(1)
     if cpc_contrast == 'batch':

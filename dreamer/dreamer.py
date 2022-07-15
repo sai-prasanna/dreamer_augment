@@ -62,8 +62,8 @@ DEFAULT_CONFIG = with_common_config({
     "explore_noise": 0.3,
     # Batch mode
     "batch_mode": "complete_episodes",
-    "contrast_batch_amount": 10,
-    "contrast_time_amount": 30,
+    "cpc_batch_amount": 10,
+    "cpc_time_amount": 30,
     # Custom Model
     "dreamer_model": {
         "custom_model": DreamerModel,

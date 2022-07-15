@@ -507,9 +507,9 @@ class DreamerModel(TorchModelV2, nn.Module):
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
 
-        if self.constrastive_loss == "cpc" or self.constrastive_loss == "cpc_augment":
+        if self.contrastive_loss == "cpc" or self.contrastive_loss  == "cpc_augment":
             # input to the state model is the ouput of the conv encoder
-            self.state_model = DenseDecoder(self.depth, self.stoch_size + self.deter_size, 3, self.hidden_size)
+            self.state_model = DenseDecoder(32*self.depth, self.stoch_size + self.deter_size, 3, self.hidden_size)
 
     def policy(
             self, obs: TensorType, state: List[TensorType], explore=True
