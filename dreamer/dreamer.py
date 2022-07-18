@@ -6,16 +6,16 @@ from collections import OrderedDict
 import numpy as np
 from ray.rllib.agents import with_common_config
 from ray.rllib.agents.trainer import Trainer
-from ray.rllib.execution.common import STEPS_SAMPLED_COUNTER, _get_shared_metrics
-from ray.rllib.policy.sample_batch import DEFAULT_POLICY_ID, SampleBatch
 from ray.rllib.evaluation.metrics import collect_metrics
+from ray.rllib.execution.common import STEPS_SAMPLED_COUNTER, _get_shared_metrics
 from ray.rllib.execution.rollout_ops import ParallelRollouts
+from ray.rllib.policy.sample_batch import DEFAULT_POLICY_ID, SampleBatch
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.metrics.learner_info import LEARNER_INFO
 from ray.rllib.utils.typing import SampleBatchType, TrainerConfigDict
 
-from dreamer.dreamer_torch_policy import DreamerTorchPolicy
 from dreamer.dreamer_model import DreamerModel
+from dreamer.dreamer_torch_policy import DreamerTorchPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,8 @@ DEFAULT_CONFIG = with_common_config({
     # Batch mode
     "batch_mode": "truncate_episodes",
     "rollout_fragment_length": 5,
+    "cpc_batch_amount": 10,
+    "cpc_time_amount": 30,
     # Custom Model
     "dreamer_model": {
         "custom_model": DreamerModel,
@@ -94,6 +96,8 @@ DEFAULT_CONFIG = with_common_config({
         "frame_skip": 2,
     }
 })
+
+
 # __sphinx_doc_end__
 # fmt: on
 
@@ -152,7 +156,7 @@ class EpisodicBuffer(object):
                 continue
             available = episode.count - self.length
             index = int(random.randint(0, available))
-            episodes_buffer.append(episode[index : index + self.length])
+            episodes_buffer.append(episode[index: index + self.length])
 
         batch = {}
         for k in episodes_buffer[0].keys():
@@ -166,7 +170,8 @@ def total_sampled_timesteps(worker):
 
 class DreamerIteration:
     def __init__(
-        self, worker, episode_buffer, min_train_iters, max_train_iters, train_iters_per_rollout, batch_size, act_repeat
+            self, worker, episode_buffer, min_train_iters, max_train_iters, train_iters_per_rollout, batch_size,
+            act_repeat
     ):
         self.worker = worker
         self.episode_buffer = episode_buffer
@@ -182,7 +187,7 @@ class DreamerIteration:
         num_iterations = min(max(n_rollouts * self.train_iters_per_rollout, self.min_train_iters), self.max_train_iters)
         # Dreamer training loop.
         for n in range(num_iterations):
-            #print(f"sub-iteration={n}/{self.dreamer_train_iters}")
+            # print(f"sub-iteration={n}/{self.dreamer_train_iters}")
             batch = self.episode_buffer.sample(self.batch_size)
             # if n == num_iterations - 1 and n_rollouts % 10 == 0:
             #     batch["log_gif"] = True
@@ -254,7 +259,7 @@ class DREAMERTrainer(Trainer):
     @override(Trainer)
     def execution_plan(workers, config, **kwargs):
         assert (
-            len(kwargs) == 0
+                len(kwargs) == 0
         ), "Dreamer execution_plan does NOT take any additional parameters"
 
         # Special replay buffer for Dreamer agent.

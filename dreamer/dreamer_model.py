@@ -1,10 +1,10 @@
-from multiprocessing.sharedctypes import Value
-import numpy as np
 from typing import Any, List, Tuple
+
+import numpy as np
 from ray.rllib.models.torch.misc import Reshape
 from ray.rllib.models.torch.torch_modelv2 import TorchModelV2
-from ray.rllib.utils.framework import try_import_torch
 from ray.rllib.utils.framework import TensorType
+from ray.rllib.utils.framework import try_import_torch
 
 from dreamer.augmentation import Augmentation
 
@@ -30,7 +30,7 @@ class ConvEncoder(nn.Module):
     """
 
     def __init__(
-        self, depth: int = 32, act: ActFunc = None, shape: Tuple[int] = (3, 64, 64)
+            self, depth: int = 32, act: ActFunc = None, shape: Tuple[int] = (3, 64, 64)
     ):
         """Initializes Conv Encoder
 
@@ -80,11 +80,11 @@ class ConvDecoder(nn.Module):
     """
 
     def __init__(
-        self,
-        input_size: int,
-        depth: int = 32,
-        act: ActFunc = None,
-        shape: Tuple[int] = (3, 64, 64),
+            self,
+            input_size: int,
+            depth: int = 32,
+            act: ActFunc = None,
+            shape: Tuple[int] = (3, 64, 64),
     ):
         """Initializes a ConvDecoder instance.
 
@@ -135,13 +135,13 @@ class DenseDecoder(nn.Module):
     """
 
     def __init__(
-        self,
-        input_size: int,
-        output_size: int,
-        layers: int,
-        units: int,
-        dist: str = "normal",
-        act: ActFunc = None,
+            self,
+            input_size: int,
+            output_size: int,
+            layers: int,
+            units: int,
+            dist: str = "normal",
+            act: ActFunc = None,
     ):
         """Initializes FC network
 
@@ -193,16 +193,16 @@ class ActionDecoder(nn.Module):
     """
 
     def __init__(
-        self,
-        input_size: int,
-        action_size: int,
-        layers: int,
-        units: int,
-        dist: str = "tanh_normal",
-        act: ActFunc = None,
-        min_std: float = 1e-4,
-        init_std: float = 5.0,
-        mean_scale: float = 5.0,
+            self,
+            input_size: int,
+            action_size: int,
+            layers: int,
+            units: int,
+            dist: str = "tanh_normal",
+            act: ActFunc = None,
+            min_std: float = 1e-4,
+            init_std: float = 5.0,
+            mean_scale: float = 5.0,
     ):
         """Initializes Policy
 
@@ -272,13 +272,13 @@ class RSSM(nn.Module):
     """
 
     def __init__(
-        self,
-        action_size: int,
-        embed_size: int,
-        stoch: int = 30,
-        deter: int = 200,
-        hidden: int = 200,
-        act: ActFunc = None,
+            self,
+            action_size: int,
+            embed_size: int,
+            stoch: int = 30,
+            deter: int = 200,
+            hidden: int = 200,
+            act: ActFunc = None,
     ):
         """Initializes RSSM
 
@@ -332,7 +332,7 @@ class RSSM(nn.Module):
         ]
 
     def observe(
-        self, embed: TensorType, action: TensorType, state: List[TensorType] = None
+            self, embed: TensorType, action: TensorType, state: List[TensorType] = None
     ) -> Tuple[List[TensorType], List[TensorType]]:
         """Returns the corresponding states from the embedding from ConvEncoder
         and actions. This is accomplished by rolling out the RNN from the
@@ -377,7 +377,7 @@ class RSSM(nn.Module):
         return post, prior
 
     def imagine(
-        self, action: TensorType, state: List[TensorType] = None
+            self, action: TensorType, state: List[TensorType] = None
     ) -> List[TensorType]:
         """Imagines the trajectory starting from state through a list of actions.
         Similar to observe(), requires rolling out the RNN for each timestep.
@@ -406,7 +406,7 @@ class RSSM(nn.Module):
         return prior
 
     def obs_step(
-        self, prev_state: TensorType, prev_action: TensorType, embed: TensorType
+            self, prev_state: TensorType, prev_action: TensorType, embed: TensorType
     ) -> Tuple[List[TensorType], List[TensorType]]:
         """Runs through the posterior model and returns the posterior state
 
@@ -430,7 +430,7 @@ class RSSM(nn.Module):
         return post, prior
 
     def img_step(
-        self, prev_state: TensorType, prev_action: TensorType
+            self, prev_state: TensorType, prev_action: TensorType
     ) -> List[TensorType]:
         """Runs through the prior model and returns the prior state
 
@@ -507,8 +507,12 @@ class DreamerModel(TorchModelV2, nn.Module):
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
 
+        if self.contrastive_loss == "cpc" or self.contrastive_loss  == "cpc_augment":
+            # input to the state model is the ouput of the conv encoder
+            self.state_model = DenseDecoder(32*self.depth, self.stoch_size + self.deter_size, 3, self.hidden_size)
+
     def policy(
-        self, obs: TensorType, state: List[TensorType], explore=True
+            self, obs: TensorType, state: List[TensorType], explore=True
     ) -> Tuple[TensorType, List[float], List[TensorType]]:
         """Returns the action. Runs through the encoder, recurrent model,
         and policy to obtain action.
