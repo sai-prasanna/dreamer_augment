@@ -1,5 +1,7 @@
 import logging
+import math
 import random
+from collections import OrderedDict
 
 import numpy as np
 from ray.rllib.agents import with_common_config
@@ -35,8 +37,8 @@ DEFAULT_CONFIG = with_common_config({
     # Clipping is done inherently via policy tanh.
     "clip_actions": False,
     # Training iterations per data collection from real env
-    "min_train_iters": 200,
-    "max_train_iters": 200,
+    "min_train_iters": 1,
+    "max_train_iters": 1,
     "train_iters_per_rollout": 1,
     # Horizon for Enviornment (1000 for Mujoco/DMC)
     "horizon": 1000,
@@ -61,7 +63,8 @@ DEFAULT_CONFIG = with_common_config({
     # Exploration Greedy
     "explore_noise": 0.3,
     # Batch mode
-    "batch_mode": "complete_episodes",
+    "batch_mode": "truncate_episodes",
+    "rollout_fragment_length": 5,
     "cpc_batch_amount": 10,
     "cpc_time_amount": 30,
     # Custom Model
@@ -110,7 +113,7 @@ class EpisodicBuffer(object):
         """
 
         # Stores all episodes into a list: List[SampleBatchType]
-        self.episodes = []
+        self.episodes = OrderedDict()
         self.max_length = max_length
         self.timesteps = 0
         self.total_episodes = 0
@@ -123,16 +126,21 @@ class EpisodicBuffer(object):
         Args:
             batch: SampleBatch to be added
         """
-
         self.timesteps += batch.count
         episodes = batch.split_by_episode()
-        self.episodes.extend(episodes)
+
+        for episode in episodes:
+            eps_id = episode['eps_id'][0]
+            if eps_id not in self.episodes:
+                self.episodes[eps_id] = SampleBatch(episode)
+            else:
+                self.episodes[eps_id] = self.episodes[eps_id].concat(episode)
         self.total_episodes += len(episodes)
 
         if len(self.episodes) > self.max_length:
             delta = len(self.episodes) - self.max_length
-            # Drop oldest episodes
-            self.episodes = self.episodes[delta:]
+            for _ in range(delta):
+                self.episodes.popitem(last=False)
 
     def sample(self, batch_size: int):
         """Samples [batch_size, length] from the list of episodes
@@ -142,7 +150,7 @@ class EpisodicBuffer(object):
         """
         episodes_buffer = []
         while len(episodes_buffer) < batch_size:
-            rand_index = random.randint(0, len(self.episodes) - 1)
+            rand_index = random.choice(list(self.episodes.keys())[:-1])
             episode = self.episodes[rand_index]
             if episode.count < self.length:
                 continue
@@ -150,7 +158,6 @@ class EpisodicBuffer(object):
             index = int(random.randint(0, available))
             episodes_buffer.append(episode[index: index + self.length])
 
-        # return SampleBatch.concat_samples(episodes_buffer)
         batch = {}
         for k in episodes_buffer[0].keys():
             batch[k] = np.stack([e[k] for e in episodes_buffer], axis=0)
@@ -186,6 +193,7 @@ class DreamerIteration:
             #     batch["log_gif"] = True
             fetches = self.worker.learn_on_batch(batch)
 
+
         # Custom Logging
         policy_fetches = self.policy_stats(fetches)
         if "log_gif" in policy_fetches:
@@ -202,8 +210,12 @@ class DreamerIteration:
         res["info"].update(metrics.counters)
         res["timesteps_total"] = metrics.counters[STEPS_SAMPLED_COUNTER]
         res["dreamer_train_iterations"] = num_iterations
-
         self.episode_buffer.add(samples)
+        if math.isnan(res['episode_reward_max']):
+            del res['episode_reward_max']
+            del res['episode_reward_mean']
+            del res['episode_reward_min']
+            del res['episode_len_mean']
         return res
 
     def postprocess_gif(self, gif: np.ndarray):
@@ -232,10 +244,8 @@ class DREAMERTrainer(Trainer):
             raise ValueError("`num_gpus` > 1 not yet supported for Dreamer!")
         if config["framework"] != "torch":
             raise ValueError("Dreamer not supported in Tensorflow yet!")
-        if config["batch_mode"] != "complete_episodes":
-            raise ValueError("truncate_episodes not supported")
         if config["num_workers"] != 0:
-            raise ValueError("Distributed Dreamer not supported yet!")
+            raise ValueError("Distributed Dreamer not supported yet!") 
         if config["clip_actions"]:
             raise ValueError("Clipping is done inherently via policy tanh!")
         if config["action_repeat"] > 1:
@@ -261,7 +271,6 @@ class DREAMERTrainer(Trainer):
         while total_sampled_timesteps(local_worker) < config["prefill_timesteps"]:
             samples = local_worker.sample()
             episode_buffer.add(samples)
-
         batch_size = config["batch_size"]
         act_repeat = config["action_repeat"]
 
