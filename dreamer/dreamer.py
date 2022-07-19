@@ -116,7 +116,6 @@ class EpisodicBuffer(object):
         self.episodes = OrderedDict()
         self.max_length = max_length
         self.timesteps = 0
-        self.total_episodes = 0
         self.length = length
 
     def add(self, batch: SampleBatchType):
@@ -135,7 +134,6 @@ class EpisodicBuffer(object):
                 self.episodes[eps_id] = SampleBatch(episode)
             else:
                 self.episodes[eps_id] = self.episodes[eps_id].concat(episode)
-        self.total_episodes += len(episodes)
 
         if len(self.episodes) > self.max_length:
             delta = len(self.episodes) - self.max_length
