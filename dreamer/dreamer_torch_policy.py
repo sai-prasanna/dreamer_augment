@@ -98,7 +98,7 @@ def compute_dreamer_loss(
         contrastive_loss = compute_barlow_twins_loss(features, features_2)
 
     elif model.contrastive_loss == 'cpc':
-        state_preds = model.state_model(model.encoder(obs))
+        state_preds = model.state_model(latent)
         if len(state_preds.mean.size()) < 3:
             contrastive_loss = 0
         else:
