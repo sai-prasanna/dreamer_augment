@@ -126,10 +126,9 @@ class EpisodicBuffer:
             else:
                 self.episodes[eps_id] = self.episodes[eps_id].concat(episode)
 
-        if len(self.episodes) > self.max_length:
-            delta = len(self.episodes) - self.max_length
-            for _ in range(delta):
-                self.episodes.popitem(last=False)
+        while self.timesteps > self.max_length:
+            _, episode = self.episodes.popitem(last=False)
+            self.timesteps -= len(episode['reward'])
 
     def sample(self, batch_size: int):
         """Samples [batch_size, length] from the list of episodes

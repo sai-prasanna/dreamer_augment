@@ -57,7 +57,7 @@ def run_experiment():
             "num_gpus": 1,
             "num_workers": 0,
             #"train_iters_per_rollout": 1,
-            "env": tune.grid_search(["cheetah", "finger_spin"]),
+            "env": "cheetah",
             "env_config": {"frame_skip": 2},
             "pretrain": 100,
             "replay": {"prioritize_ends": False},
