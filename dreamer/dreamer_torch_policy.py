@@ -98,7 +98,7 @@ def compute_dreamer_loss(
         contrastive_loss = compute_barlow_twins_loss(features, features_2)
 
     elif model.contrastive_loss == 'cpc':
-        state_preds = model.state_model(model.encoder(obs))
+        state_preds = model.state_model(latent)
         if len(state_preds.mean.size()) < 3:
             contrastive_loss = 0
         else:
@@ -120,7 +120,7 @@ def compute_dreamer_loss(
             contrastive_obj += compute_cpc_obj(state_preds, features, cpc_amount)
             contrastive_obj += compute_cpc_obj(state_preds_noaug, features_noaug, cpc_amount)
             contrastive_obj += compute_cpc_obj(state_preds, features_noaug, cpc_amount)
-            contrastive_loss = -contrastive_obj.mean()
+            contrastive_loss = -contrastive_obj.mean()/4
 
     # Don't use decoder to train the state representations when using contrastive
     image_pred = model.decoder(features.detach() if model.contrastive_loss else features)
@@ -142,7 +142,7 @@ def compute_dreamer_loss(
         torch.distributions.kl_divergence(post_dist, prior_dist).sum(dim=2)
     )
     if model.contrastive_loss:
-        model_loss = kl_coeff * div + reward_loss + image_loss + contrastive_loss
+        model_loss = kl_coeff * div + reward_loss + contrastive_loss #+ image_loss
     else:
         model_loss = kl_coeff * div + reward_loss + image_loss
 
