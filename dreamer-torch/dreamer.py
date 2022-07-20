@@ -18,6 +18,7 @@ import models
 import tools
 import wrappers
 
+import wandb
 import torch
 from torch import nn
 from torch import distributions as torchd
@@ -235,10 +236,15 @@ def main(config):
 
   print('Logdir', logdir)
   logdir.mkdir(parents=True, exist_ok=True)
+  if config.wandb_api_key:
+    os.environ["WANDB_API_KEY"] = config.wandb_api_key
+    wandb.init(entity=config.wandb_entity, project=config.wandb_project, config=vars(config))
+    wandb.tensorboard.patch(root_logdir=str(logdir))
   config.traindir.mkdir(parents=True, exist_ok=True)
   config.evaldir.mkdir(parents=True, exist_ok=True)
   step = count_steps(config.traindir)
   logger = tools.Logger(logdir, config.action_repeat * step)
+  
 
   print('Create envs.')
   if config.offline_traindir:
