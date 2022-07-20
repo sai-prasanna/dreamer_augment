@@ -133,9 +133,9 @@ class EpisodicBuffer(object):
             eps_id = episode['eps_id'][0]
             if eps_id not in self.episodes:
                 self.episodes[eps_id] = SampleBatch(episode)
+                self.total_episodes+= 1
             else:
                 self.episodes[eps_id] = self.episodes[eps_id].concat(episode)
-        self.total_episodes += len(episodes)
 
         if len(self.episodes) > self.max_length:
             delta = len(self.episodes) - self.max_length
@@ -184,13 +184,14 @@ class DreamerIteration:
 
     def __call__(self, samples):
         n_rollouts = self.episode_buffer.timesteps // samples.count
+        n_episodes = self.episode_buffer.total_episodes
         num_iterations = min(max(n_rollouts * self.train_iters_per_rollout, self.min_train_iters), self.max_train_iters)
         # Dreamer training loop.
         for n in range(num_iterations):
             # print(f"sub-iteration={n}/{self.dreamer_train_iters}")
             batch = self.episode_buffer.sample(self.batch_size)
-            # if n == num_iterations - 1 and n_rollouts % 10 == 0:
-            #     batch["log_gif"] = True
+            if n == num_iterations - 1 and n_episodes % 10 == 0:
+                batch["log_gif"] = True
             fetches = self.worker.learn_on_batch(batch)
 
 

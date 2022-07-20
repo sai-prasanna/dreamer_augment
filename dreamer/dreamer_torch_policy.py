@@ -142,7 +142,7 @@ def compute_dreamer_loss(
         torch.distributions.kl_divergence(post_dist, prior_dist).sum(dim=2)
     )
     if model.contrastive_loss:
-        model_loss = kl_coeff * div + reward_loss + contrastive_loss #+ image_loss
+        model_loss = kl_coeff * div + reward_loss + contrastive_loss + image_loss
     else:
         model_loss = kl_coeff * div + reward_loss + image_loss
 
