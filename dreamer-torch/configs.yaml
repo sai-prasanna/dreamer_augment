@@ -12,7 +12,7 @@ defaults:
   reset_every: 0
   #gpu_growth: True
   device: 'cuda:0'
-  precision: 16
+  precision: 32
   debug: False
   expl_gifs: False
 
@@ -118,6 +118,16 @@ defaults:
   disag_units: 400
   disag_action_cond: False
 
+  # Augmentation
+  augment: False
+  augment_strong: False
+  augment_pad: 4
+  augment_consistent: True
+
+  # Wandb
+  wandb_api_key: 'fd1a595a3c1caa35b1f907727fb99c479fcf59ae'
+  wandb_project: 'dream_aug'
+  wandb_entity: 'neuromancers'
 
 dmlab:
 

@@ -9,3 +9,4 @@ gym[atari]==0.18.0
 moviepy==1.0.3
 einops==0.3.0
 wandb
+kornia

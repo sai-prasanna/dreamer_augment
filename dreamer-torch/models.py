@@ -5,6 +5,7 @@ from PIL import ImageColor, Image, ImageDraw, ImageFont
 
 import networks
 import tools
+import augmentations
 to_np = lambda x: x.detach().cpu().numpy()
 
 
@@ -15,6 +16,9 @@ class WorldModel(nn.Module):
     self._step = step
     self._use_amp = True if config.precision==16 else False
     self._config = config
+    self.augment = None
+    if config.augment:
+      self.augment = augmentations.Augmentation(config.augment_strong, config.augment_consistent, config.augment_pad, config.size[0])
     self.encoder = networks.ConvEncoder(config.grayscale,
         config.cnn_depth, config.act, config.encoder_kernels)
     if config.size[0] == 64 and config.size[1] == 64:
@@ -57,11 +61,17 @@ class WorldModel(nn.Module):
         reward=config.reward_scale, discount=config.discount_scale)
 
   def _train(self, data):
+    
     data = self.preprocess(data)
 
     with tools.RequiresGrad(self):
       with torch.cuda.amp.autocast(self._use_amp):
-        embed = self.encoder(data)
+
+        obs = data['image']
+        if self.augment:
+          obs = self.augment(obs)
+
+        embed = self.encoder({'image': obs})
         post, prior = self.dynamics.observe(embed, data['action'])
         kl_balance = tools.schedule(self._config.kl_balance, self._step)
         kl_free = tools.schedule(self._config.kl_free, self._step)
