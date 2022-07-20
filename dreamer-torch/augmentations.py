@@ -1,3 +1,4 @@
+import time
 import torch.nn.functional as F
 from torch import Tensor
 import kornia.augmentation as K
@@ -35,9 +36,6 @@ class Augmentation(nn.Module):
         X = X.permute(0, 1, 4, 2, 3)
         X = X + 0.5 # The image should be in range 0 to 1.0 for strong transforms
         orig_shape = X.shape
-        if len(orig_shape) == 4:
-            print("STUPID RLLIB TEST USELESS - NOT AUGMENTING")
-            return X
         if self.consistent_crop:
             X = self.random_crop(X.reshape(orig_shape[0], 1, orig_shape[1] * orig_shape[2], *orig_shape[3:])).view(
                 orig_shape).contiguous()
