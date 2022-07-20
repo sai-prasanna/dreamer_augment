@@ -1,5 +1,4 @@
 defaults:
-
   logdir: null
   traindir: null
   evaldir: null
@@ -128,7 +127,7 @@ defaults:
   wandb_api_key: 'fd1a595a3c1caa35b1f907727fb99c479fcf59ae'
   wandb_project: 'dream_aug'
   wandb_entity: 'neuromancers'
-
+  wandb_name: null
 dmlab:
 
   # General
