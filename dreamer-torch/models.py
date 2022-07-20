@@ -70,6 +70,7 @@ class WorldModel(nn.Module):
             post, prior, self._config.kl_forward, kl_balance, kl_free, kl_scale)
         losses = {}
         likes = {}
+          
         for name, head in self.heads.items():
           grad_head = (name in self._config.grad_heads)
           feat = self.dynamics.get_feat(post)
@@ -128,6 +129,17 @@ class WorldModel(nn.Module):
     error = (model - truth + 1) / 2
 
     return torch.cat([truth, model, error], 2)
+  
+  def compute_triplet_loss(feature1, feature2, loss_margin=2, negative_frame_margin=10):
+    tripletBuilder = FeatureTripletBuilder(feature1, feature2, negative_frame_margin=negative_frame_margin)
+
+    anchor_frames, positive_frames, negative_frames = tripletBuilder.build_set()
+
+    d_positive = distance(anchor_frames, positive_frames)
+    d_negative = distance(anchor_frames, negative_frames)
+    loss_triplet = torch.clamp(loss_margin + d_positive - d_negative, min=0.0).mean()
+
+    return loss_triplet
 
 
 class ImagBehavior(nn.Module):
