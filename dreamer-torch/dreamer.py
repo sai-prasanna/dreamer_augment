@@ -6,7 +6,7 @@ import pathlib
 import sys
 import warnings
 
-os.environ['MUJOCO_GL'] = 'glfw'
+os.environ['MUJOCO_GL'] = 'egl'
 
 import numpy as np
 import ruamel.yaml as yaml
