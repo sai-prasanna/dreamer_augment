@@ -34,7 +34,7 @@ def run_experiment(env):
         local_dir=os.path.join("../dreamer_augment/data", "dmc"),
         checkpoint_at_end=True,
         config={
-            "seed": tune.grid_search([42, 1337]),
+            #"seed": tune.grid_search([42, 1337]),
             "batch_size": 4,
             "batch_length": 7,
             "td_model_lr": tune.loguniform(6e-5, 1e-3),

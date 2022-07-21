@@ -177,7 +177,8 @@ def compute_dreamer_loss(
 
     log_gif = None
     if log:
-        log_gif = log_summary(obs, action, latent, image_pred, model)
+        log_gif = log_summary(obs, action, latent, image_pred, model, obs_aug) if model.augment else \
+            log_summary(obs, action, latent, image_pred, model)
 
     return_dict = {
         "model_loss": model_loss,
@@ -188,6 +189,10 @@ def compute_dreamer_loss(
         "critic_loss": critic_loss,
         "prior_ent": prior_ent,
         "post_ent": post_ent,
+        "obs_aug_mean": obs_aug.mean(),
+        "obs_aug_std": obs_aug.std(),
+        "obs_mean": obs.mean(),
+        "obs_std": obs.std(),
     }
     if model.contrastive_loss:
         return_dict["contrastive_loss"] = contrastive_loss
@@ -237,7 +242,7 @@ def lambda_return(reward, value, pcont, bootstrap, lambda_):
 
 
 # Creates gif
-def log_summary(obs, action, embed, image_pred, model):
+def log_summary(obs, action, embed, image_pred, model, obs_aug=None):
     truth = obs[:6] + 0.5
     recon = image_pred.mean[:6]
     init, _ = model.dynamics.observe(embed[:6, :5], action[:6, :5])
@@ -247,6 +252,11 @@ def log_summary(obs, action, embed, image_pred, model):
 
     mod = torch.cat([recon[:, :5] + 0.5, openl + 0.5], 1)
     error = (mod - truth + 1.0) / 2.0
+
+    if obs_aug is not None:
+        truth_aug = obs_aug[:6] + 0.5
+        return torch.cat([truth, truth_aug, mod, error], 3)
+
     return torch.cat([truth, mod, error], 3)
 
 
