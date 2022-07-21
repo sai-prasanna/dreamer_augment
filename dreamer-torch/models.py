@@ -5,7 +5,7 @@ from PIL import ImageColor, Image, ImageDraw, ImageFont
 
 import networks
 import tools
-from tools import FeatureTripletBuilder, distance
+from tools import FeatureTripletBuilder, distance, BarlowTwins
 import augmentations
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -18,7 +18,7 @@ class WorldModel(nn.Module):
     self._use_amp = True if config.precision==16 else False
     self._config = config
     self.augment = None
-    self.triplet = None
+    self.contrastive = None
     if self._config.contrastive:
       self._config.grad_heads = [h for h in self._config.grad_heads if h != 'image']
       print("disable image gradinent to the RSMM")
@@ -27,8 +27,11 @@ class WorldModel(nn.Module):
     self.encoder = networks.ConvEncoder(config.grayscale,
         config.cnn_depth, config.act, config.encoder_kernels)
     if self._config.contrastive == "triplet":
-      self.triplet = True
+      self.contrastive = "triplet"
       print("triplet activated")
+    if self._config.contrastive == "barlow_twins":
+      self.contrastive = "barlow_twins"
+      print("barlow_twins activated")
     if config.size[0] == 64 and config.size[1] == 64:
       embed_size = 2 ** (len(config.encoder_kernels)-1) * config.cnn_depth
       embed_size *= 2 * 2
@@ -96,7 +99,13 @@ class WorldModel(nn.Module):
           like = pred.log_prob(data[name])
           likes[name] = like
           losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
-        if self.triplet:
+        if self.contrastive == "barlow_twins":
+          feat = self.dynamics.get_feat(post)
+          embed2 = self.encoder({'image': self.augment(data['image'])})
+          post2, prior2 = self.dynamics.observe(embed2, data['action'])
+          feat2 = self.dynamics.get_feat(post2)
+          barlow_loss = self.compute_barlow_twins_loss(feat,feat2)
+        if self.contrastive == "triplet":
           feat = self.dynamics.get_feat(post)
           embed2 = self.encoder({'image': self.augment(data['image'])})
           post2, prior2 = self.dynamics.observe(embed2, data['action'])
@@ -104,13 +113,17 @@ class WorldModel(nn.Module):
           feat = feat.view(-1,feat.shape[2])
           feat2 = feat2.view(-1,feat2.shape[2])
           triplet_loss = self.compute_triplet_loss(feat,feat2)
-        if self.triplet:
+        if self.contrastive == "triplet":
           model_loss = sum(losses.values()) + kl_loss + triplet_loss
+        elif self.contrastive == "barlow_twins":
+          model_loss = sum(losses.values()) + kl_loss + barlow_loss
         else: 
           model_loss = sum(losses.values()) + kl_loss
       metrics = self._model_opt(model_loss, self.parameters())
-    if self.triplet:
+    if self.contrastive == "triplet":
       metrics.update({'triplet_loss':to_np(triplet_loss)})
+    elif self.contrastive == "barlow_twins":
+      metrics.update({'barlow_twins_loss':to_np(barlow_loss)})
     metrics.update({f'{name}_loss': to_np(loss) for name, loss in losses.items()})
     metrics['kl_balance'] = kl_balance
     metrics['kl_free'] = kl_free
@@ -168,9 +181,14 @@ class WorldModel(nn.Module):
     d_negative = distance(anchor_frames, negative_frames)
     loss_triplet = torch.clamp(loss_margin + d_positive - d_negative, min=0.0).mean()
 
-    #print("TRIPLET LOSS: " + str(loss_triplet.item()))
-
     return loss_triplet
+  
+  def compute_barlow_twins_loss(self, feature1, feature2, lambd=0.0051):
+    feature1 = feature1.view(-1, feature1.shape[2])
+    feature2 = feature2.view(-1, feature2.shape[2])
+    bt = BarlowTwins(feature1.shape[0], feature1.shape[1], lambd).cuda()
+    loss = bt.forward(feature1, feature2)
+    return loss
 
 class ImagBehavior(nn.Module):
 
