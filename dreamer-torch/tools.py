@@ -646,12 +646,12 @@ def schedule(string, step):
 
 
 class FeatureTripletBuilder(object):
-    def __init__(self, feature_1, feature_2, negative_frame_margin=10):
+    def __init__(self, feature_1_, feature_2_, negative_frame_margin=10):
         # The negative example has to be from outside the buffer window. Taken from both sides of
         # ihe frame.
         self.negative_frame_margin = negative_frame_margin
-        self.anchor = feature_1.view(-1, feature_1.shape[2])
-        self.positive = feature_2.view(-1, feature_2.shape[2])
+        self.anchor = feature_1_
+        self.positive = feature_2_
         self.frame_lengths = self.anchor.shape[0]
         self.negatives = torch.Tensor(self.anchor.shape[0], self.anchor.shape[1]).cuda()
 

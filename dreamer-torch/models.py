@@ -5,6 +5,7 @@ from PIL import ImageColor, Image, ImageDraw, ImageFont
 
 import networks
 import tools
+from tools import FeatureTripletBuilder, distance
 import augmentations
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -17,10 +18,17 @@ class WorldModel(nn.Module):
     self._use_amp = True if config.precision==16 else False
     self._config = config
     self.augment = None
+    self.triplet = None
+    if self._config.contrastive:
+      self._config.grad_heads = [h for h in self._config.grad_heads if h != 'image']
+      print("disable image gradinent to the RSMM")
     if config.augment:
       self.augment = augmentations.Augmentation(config.augment_strong, config.augment_consistent, config.augment_pad, config.size[0])
     self.encoder = networks.ConvEncoder(config.grayscale,
         config.cnn_depth, config.act, config.encoder_kernels)
+    if self._config.contrastive == "triplet":
+      self.triplet = True
+      print("triplet activated")
     if config.size[0] == 64 and config.size[1] == 64:
       embed_size = 2 ** (len(config.encoder_kernels)-1) * config.cnn_depth
       embed_size *= 2 * 2
@@ -80,7 +88,6 @@ class WorldModel(nn.Module):
             post, prior, self._config.kl_forward, kl_balance, kl_free, kl_scale)
         losses = {}
         likes = {}
-          
         for name, head in self.heads.items():
           grad_head = (name in self._config.grad_heads)
           feat = self.dynamics.get_feat(post)
@@ -89,9 +96,21 @@ class WorldModel(nn.Module):
           like = pred.log_prob(data[name])
           likes[name] = like
           losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
-        model_loss = sum(losses.values()) + kl_loss
+        if self.triplet:
+          feat = self.dynamics.get_feat(post)
+          embed2 = self.encoder({'image': self.augment(data['image'])})
+          post2, prior2 = self.dynamics.observe(embed2, data['action'])
+          feat2 = self.dynamics.get_feat(post2)
+          feat = feat.view(-1,feat.shape[2])
+          feat2 = feat2.view(-1,feat2.shape[2])
+          triplet_loss = self.compute_triplet_loss(feat,feat2)
+        if self.triplet:
+          model_loss = sum(losses.values()) + kl_loss + triplet_loss
+        else: 
+          model_loss = sum(losses.values()) + kl_loss
       metrics = self._model_opt(model_loss, self.parameters())
-
+    if self.triplet:
+      metrics.update({'triplet_loss':to_np(triplet_loss)})
     metrics.update({f'{name}_loss': to_np(loss) for name, loss in losses.items()})
     metrics['kl_balance'] = kl_balance
     metrics['kl_free'] = kl_free
@@ -139,8 +158,8 @@ class WorldModel(nn.Module):
     error = (model - truth + 1) / 2
 
     return torch.cat([truth, model, error], 2)
-  
-  def compute_triplet_loss(feature1, feature2, loss_margin=2, negative_frame_margin=10):
+
+  def compute_triplet_loss(self, feature1, feature2, loss_margin=2, negative_frame_margin=20):
     tripletBuilder = FeatureTripletBuilder(feature1, feature2, negative_frame_margin=negative_frame_margin)
 
     anchor_frames, positive_frames, negative_frames = tripletBuilder.build_set()
@@ -149,8 +168,9 @@ class WorldModel(nn.Module):
     d_negative = distance(anchor_frames, negative_frames)
     loss_triplet = torch.clamp(loss_margin + d_positive - d_negative, min=0.0).mean()
 
-    return loss_triplet
+    #print("TRIPLET LOSS: " + str(loss_triplet.item()))
 
+    return loss_triplet
 
 class ImagBehavior(nn.Module):
 
@@ -313,5 +333,4 @@ class ImagBehavior(nn.Module):
         for s, d in zip(self.value.parameters(), self._slow_value.parameters()):
           d.data = mix * s.data + (1 - mix) * d.data
       self._updates += 1
-
 

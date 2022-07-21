@@ -124,6 +124,9 @@ defaults:
   augment_pad: 4
   augment_consistent: True
 
+  #Contrastive
+  contrastive: Null
+
   # Wandb
   wandb_api_key: 'fd1a595a3c1caa35b1f907727fb99c479fcf59ae'
   wandb_project: 'dream_aug'
@@ -292,4 +295,3 @@ debug:
   train_steps: 1
   batch_size: 10
   batch_length: 20
-
