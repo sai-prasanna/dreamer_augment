@@ -1,109 +1,99 @@
+from collections import OrderedDict
 import logging
 import math
-import random
-from collections import OrderedDict
 
+import random
 import numpy as np
+
 from ray.rllib.agents import with_common_config
 from ray.rllib.agents.trainer import Trainer
-from ray.rllib.evaluation.metrics import collect_metrics
 from ray.rllib.execution.common import STEPS_SAMPLED_COUNTER, _get_shared_metrics
-from ray.rllib.execution.rollout_ops import ParallelRollouts
 from ray.rllib.policy.sample_batch import DEFAULT_POLICY_ID, SampleBatch
+from ray.rllib.evaluation.metrics import collect_metrics
+from ray.rllib.execution.rollout_ops import ParallelRollouts
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.metrics.learner_info import LEARNER_INFO
 from ray.rllib.utils.typing import SampleBatchType, TrainerConfigDict
 
-from dreamer.dreamer_model import DreamerModel
-from dreamer.dreamer_torch_policy import DreamerTorchPolicy
+
+from dreamer2.dreamer_torch_policy import DreamerTorchPolicy
+from dreamer2.dreamer_model import DreamerModel
+
 
 logger = logging.getLogger(__name__)
 
 # fmt: off
 # __sphinx_doc_begin__
 DEFAULT_CONFIG = with_common_config({
-    # PlaNET Model LR
-    "td_model_lr": 6e-4,
-    # Actor LR
-    "actor_lr": 8e-5,
-    # Critic LR
-    "critic_lr": 8e-5,
-    # Grad Clipping
-    "grad_clip": 100.0,
-    # Discount
-    "discount": 0.99,
-    # Lambda
-    "lambda": 0.95,
     # Clipping is done inherently via policy tanh.
+    "_disable_preprocessor_api": True,
     "clip_actions": False,
     # Training iterations per data collection from real env
-    "min_train_iters": 1,
-    "max_train_iters": 1,
     "train_iters_per_rollout": 1,
     # Horizon for Enviornment (1000 for Mujoco/DMC)
     "horizon": 1000,
     # Number of episodes to sample for Loss Calculation
     "batch_size": 50,
     # Length of each episode to sample for Loss Calculation
-    "batch_length": 50,
-    # Number of episodes in the episodic buffer
-    "eps_buffer_max_length": 4000,
-    # Imagination Horizon for Training Actor and Critic
-    "imagine_horizon": 15,
-    # KL Coeff for the Model Loss
-    "kl_coeff": 1.0,
-    # KL balance for the model loss
-    "kl_balance": 0.8,
+    "replay": {"length": 50, "max_length": 2e6, "prioritize_ends": True},
     # Distributed Dreamer not implemented yet
     "num_workers": 0,
     # Prefill Timesteps
-    "prefill_timesteps": 5000,
+    "prefill_timesteps": 10000,
     # This should be kept at 1 to preserve sample efficiency
     "num_envs_per_worker": 1,
     # Exploration Greedy
-    "explore_noise": 0.3,
+    "explore_noise": 0.0,
     # Batch mode
     "batch_mode": "truncate_episodes",
     "rollout_fragment_length": 5,
-    "cpc_batch_amount": 10,
-    "cpc_time_amount": 30,
+    "min_train_iters": 2,
+    "max_train_iters": 2,
+    "pretrain": 0,
     # Custom Model
     "dreamer_model": {
         "custom_model": DreamerModel,
-        # RSSM/PlaNET parameters
-        "deter_size": 200,
-        "stoch_size": 30,
-        # CNN Decoder Encoder
-        "depth_size": 32,
-        # General Network Parameters
-        "hidden_size": 400,
-        # Action STD
-        "action_init_std": 5.0,
-        "augment": {
-            "type": "Augmentation",
-            "params": {
-                "strong": False,
-                "pad": 4,
-                "consistent": True,
-                "image_size": 64
-            },
-            "augmented_target": False
-        },
-        "contrastive_loss": ""
+        "clip_rewards": "tanh",
+
+        # World Model
+        "rssm": {"ensemble": 1, "discrete": 32, "stoch": 32, "deter": 1024, "hidden": 1024, "min_std": 0.1, "std_act": "sigmoid2"},
+        "encoder": {"cnn_depth": 48, "cnn_kernels": [4, 4, 4, 4], "mlp_layers": [400, 400, 400, 400]},
+        "predict_discount": False,
+        "loss_scale": {"kl": 1.0, "reward": 1.0, "discount": 1.0},
+        "kl": {"balance": 0.8, "free": 1.0},
+        "reward_head": {"layers": 4, "units": 400, "dist": "mse"},
+        "discount_head": {"layers": 4, "units": 400, "dist": "binary"},
+        "model_opt": {"lr": 1e-4, "eps": 1e-5, "clip": 100, "weight_decay": 1e-6},
+
+        # Actor Critic
+        "actor": {"dist": "auto", "layers": 4, "units": 400, "min_std": 0.1},
+        "critic": {"dist": "mse", "layers": 4, "units": 400},
+        "discount": 0.99,
+        "discount_lambda": 0.95,
+        "actor_ent": 2e-3,
+        "imagine_horizon": 15,
+        "actor_grad": "auto",
+        "actor_grad_mix": 0.1,
+        "actor_ent": 2e-3,
+        "slow_target": True,
+        "slow_target_update": 100,
+        "slow_target_fraction": 1.0,
+        "slow_baseline": True,
+        "reward_norm": {"momentum": 1.0, "scale": 1.0, "eps": 1e-8},
+        "actor_opt": {"lr": 8e-5, "eps": 1e-5, "clip": 100, "weight_decay": 1e-6},
+        "critic_opt": {"lr": 8e-5, "eps": 2e-4, "clip": 100, "weight_decay": 1e-6},
     },
     "env_config": {
-        # Repeats action send by policy for frame_skip times in env
-        "frame_skip": 2,
+        "wrap_obs_key": "image"
     }
 })
-
-
 # __sphinx_doc_end__
 # fmt: on
 
 
-class EpisodicBuffer(object):
-    def __init__(self, max_length: int = 1000, length: int = 50):
+
+class EpisodicBuffer:
+    def __init__(self, prioritize_ends: bool = False, max_length: int = 1000, length: int = 50):
         """Data structure that stores episodes and samples chunks
         of size length from episodes
 
@@ -117,6 +107,7 @@ class EpisodicBuffer(object):
         self.max_length = max_length
         self.timesteps = 0
         self.length = length
+        self.prioritize_ends = prioritize_ends
 
     def add(self, batch: SampleBatchType):
         """Splits a SampleBatch into episodes and adds episodes
@@ -132,14 +123,12 @@ class EpisodicBuffer(object):
             eps_id = episode['eps_id'][0]
             if eps_id not in self.episodes:
                 self.episodes[eps_id] = SampleBatch(episode)
-                self.total_episodes+= 1
             else:
                 self.episodes[eps_id] = self.episodes[eps_id].concat(episode)
 
-        if len(self.episodes) > self.max_length:
-            delta = len(self.episodes) - self.max_length
-            for _ in range(delta):
-                self.episodes.popitem(last=False)
+        while self.timesteps > self.max_length:
+            _, episode = self.episodes.popitem(last=False)
+            self.timesteps -= len(episode['reward'])
 
     def sample(self, batch_size: int):
         """Samples [batch_size, length] from the list of episodes
@@ -149,17 +138,26 @@ class EpisodicBuffer(object):
         """
         episodes_buffer = []
         while len(episodes_buffer) < batch_size:
-            rand_index = random.choice(list(self.episodes.keys())[:-1])
+            rand_index = random.choice(list(self.episodes.keys()))
             episode = self.episodes[rand_index]
             if episode.count < self.length:
                 continue
+            total = episode.count
             available = episode.count - self.length
-            index = int(random.randint(0, available))
+            if self.prioritize_ends:
+                index = min(random.randint(0, total), available)
+            else:
+                index = int(random.randint(0, available))
             episodes_buffer.append(episode[index: index + self.length])
 
         batch = {}
         for k in episodes_buffer[0].keys():
-            batch[k] = np.stack([e[k] for e in episodes_buffer], axis=0)
+            if isinstance(episodes_buffer[0][k], dict):
+                batch[k] = {}
+                for k1 in episodes_buffer[0][k].keys():
+                    batch[k][k1] = np.stack([e[k][k1] for e in episodes_buffer], axis=0)
+            else:
+                batch[k] = np.stack([e[k] for e in episodes_buffer], axis=0)
         return SampleBatch(batch)
 
 
@@ -169,8 +167,7 @@ def total_sampled_timesteps(worker):
 
 class DreamerIteration:
     def __init__(
-            self, worker, episode_buffer, min_train_iters, max_train_iters, train_iters_per_rollout, batch_size,
-            act_repeat
+        self, worker, episode_buffer, min_train_iters, max_train_iters, train_iters_per_rollout, batch_size, act_repeat
     ):
         self.worker = worker
         self.episode_buffer = episode_buffer
@@ -183,16 +180,14 @@ class DreamerIteration:
 
     def __call__(self, samples):
         n_rollouts = self.episode_buffer.timesteps // samples.count
-        n_episodes = self.episode_buffer.total_episodes
         num_iterations = min(max(n_rollouts * self.train_iters_per_rollout, self.min_train_iters), self.max_train_iters)
         # Dreamer training loop.
         for n in range(num_iterations):
-            # print(f"sub-iteration={n}/{self.dreamer_train_iters}")
+            #print(f"sub-iteration={n}/{self.dreamer_train_iters}")
             batch = self.episode_buffer.sample(self.batch_size)
-            if n == num_iterations - 1 and n_episodes % 10 == 0:
-                batch["log_gif"] = True
+            # if n == num_iterations - 1 and n_rollouts % 10 == 0:
+            #     batch["log_gif"] = True
             fetches = self.worker.learn_on_batch(batch)
-
 
         # Custom Logging
         policy_fetches = self.policy_stats(fetches)
@@ -210,12 +205,12 @@ class DreamerIteration:
         res["info"].update(metrics.counters)
         res["timesteps_total"] = metrics.counters[STEPS_SAMPLED_COUNTER]
         res["dreamer_train_iterations"] = num_iterations
-        self.episode_buffer.add(samples)
         if math.isnan(res['episode_reward_max']):
             del res['episode_reward_max']
             del res['episode_reward_mean']
             del res['episode_reward_min']
             del res['episode_len_mean']
+        self.episode_buffer.add(samples)
         return res
 
     def postprocess_gif(self, gif: np.ndarray):
@@ -239,13 +234,13 @@ class DREAMERTrainer(Trainer):
         # Call super's validation method.
         super().validate_config(config)
 
-        config["action_repeat"] = config["env_config"]["frame_skip"]
+        config["action_repeat"] = config.get("env_config", {}).get("frame_skip", 1)
         if config["num_gpus"] > 1:
             raise ValueError("`num_gpus` > 1 not yet supported for Dreamer!")
         if config["framework"] != "torch":
             raise ValueError("Dreamer not supported in Tensorflow yet!")
         if config["num_workers"] != 0:
-            raise ValueError("Distributed Dreamer not supported yet!") 
+            raise ValueError("Distributed Dreamer not supported yet!")
         if config["clip_actions"]:
             raise ValueError("Clipping is done inherently via policy tanh!")
         if config["action_repeat"] > 1:
@@ -259,11 +254,11 @@ class DREAMERTrainer(Trainer):
     @override(Trainer)
     def execution_plan(workers, config, **kwargs):
         assert (
-                len(kwargs) == 0
+            len(kwargs) == 0
         ), "Dreamer execution_plan does NOT take any additional parameters"
 
         # Special replay buffer for Dreamer agent.
-        episode_buffer = EpisodicBuffer(length=config["batch_length"], max_length=config["eps_buffer_max_length"])
+        episode_buffer = EpisodicBuffer(**config["replay"])
 
         local_worker = workers.local_worker()
 
@@ -271,8 +266,15 @@ class DREAMERTrainer(Trainer):
         while total_sampled_timesteps(local_worker) < config["prefill_timesteps"]:
             samples = local_worker.sample()
             episode_buffer.add(samples)
+        
+
+
         batch_size = config["batch_size"]
         act_repeat = config["action_repeat"]
+
+        for _ in range(config['pretrain']):
+            batch = episode_buffer.sample(batch_size)
+            fetches = local_worker.learn_on_batch(batch)
 
         rollouts = ParallelRollouts(workers)
         rollouts = rollouts.for_each(
