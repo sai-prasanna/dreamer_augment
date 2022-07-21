@@ -1,12 +1,10 @@
 import torch
 from torch import nn
-import numpy as np
-from PIL import ImageColor, Image, ImageDraw, ImageFont
 
 import augmentations
 import networks
 import tools
-from tools import FeatureTripletBuilder, distance
+from tools import FeatureTripletBuilder, distance, BarlowTwins
 
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -24,13 +22,15 @@ class WorldModel(nn.Module):
             self._config.grad_heads = [h for h in self._config.grad_heads if h != 'image']
             print("disable image gradinent to the RSSM")
         if config.augment:
-            self.augment = augmentations.Augmentation(config.augment_random_crop, config.augment_strong, config.augment_consistent,
+            self.augment = augmentations.Augmentation(config.augment_random_crop, config.augment_strong,
+                                                      config.augment_consistent,
                                                       config.augment_pad, config.size[0])
         self.encoder = networks.ConvEncoder(config.grayscale,
                                             config.cnn_depth, config.act, config.encoder_kernels)
         if self._config.contrastive == "triplet":
-            self.triplet = True
             print("triplet activated")
+        if self._config.contrastive == "barlow_twins":
+            print("barlow_twins activated")
         if config.size[0] == 64 and config.size[1] == 64:
             embed_size = 2 ** (len(config.encoder_kernels) - 1) * config.cnn_depth
             embed_size *= 2 * 2
@@ -100,17 +100,17 @@ class WorldModel(nn.Module):
                     feat = self.dynamics.get_feat(post)
                     feat = feat if grad_head else feat.detach()
 
-                    if name == 'cpc' and (self._config.contrastive == 'cpc' or self._config.contrastive == 'cpc_augment'):
+                    if name == 'cpc' and (
+                            self._config.contrastive == 'cpc' or self._config.contrastive == 'cpc_augment'):
                         cpc_amount = (self._config.cpc_batch_amount, self._config.cpc_time_amount)
                         pred_aug = head(embed)
                         feat_aug = feat
                         likes[name] = self.compute_cpc_obj(pred_aug, feat_aug, cpc_amount)
 
                         if self._config.contrastive == 'cpc_augment':
-
                             assert self.augment is not None, 'Augmenting should be on'
-                            #in that case we need to addd the original part without augmentation
-                            #other than that we can use the previous stuff already
+                            # in that case we need to addd the original part without augmentation
+                            # other than that we can use the previous stuff already
                             embed_noaug = self.encoder({'image': data['image']})
                             post_noaug, _ = self.dynamics.observe(embed_noaug, data['action'])
                             feat_noaug = self.dynamics.get_feat(post_noaug)
@@ -127,21 +127,27 @@ class WorldModel(nn.Module):
                         likes[name] = like
                         losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
 
-                if self.triplet:
+                if self._config.contrastive == "barlow_twins":
+                    feat = self.dynamics.get_feat(post)
+                    embed2 = self.encoder({'image': self.augment(data['image'])})
+                    post2, prior2 = self.dynamics.observe(embed2, data['action'])
+                    feat2 = self.dynamics.get_feat(post2)
+                    contrastive_loss = self.compute_barlow_twins_loss(feat, feat2)
+                if self._config.contrastive == "triplet":
                     feat = self.dynamics.get_feat(post)
                     embed2 = self.encoder({'image': self.augment(data['image'])})
                     post2, prior2 = self.dynamics.observe(embed2, data['action'])
                     feat2 = self.dynamics.get_feat(post2)
                     feat = feat.view(-1, feat.shape[2])
                     feat2 = feat2.view(-1, feat2.shape[2])
-                    triplet_loss = self.compute_triplet_loss(feat, feat2)
-                if self.triplet:
-                    model_loss = sum(losses.values()) + kl_loss + triplet_loss
+                    contrastive_loss = self.compute_triplet_loss(feat, feat2)
+                if self._config.contrastive == "triplet" or self._config.contrastive == 'barlow_twins':
+                    model_loss = sum(losses.values()) + kl_loss + contrastive_loss
                 else:
                     model_loss = sum(losses.values()) + kl_loss
             metrics = self._model_opt(model_loss, self.parameters())
-        if self.triplet:
-            metrics.update({'triplet_loss': to_np(triplet_loss)})
+        if self._config.contrastive == "triplet" or self._config.contrastive == 'barlow_twins':
+            metrics.update({f'{self._config.contrastive}_loss': to_np(contrastive_loss)})
         metrics.update({f'{name}_loss': to_np(loss) for name, loss in losses.items()})
         metrics['kl_balance'] = kl_balance
         metrics['kl_free'] = kl_free
@@ -202,6 +208,13 @@ class WorldModel(nn.Module):
         # print("TRIPLET LOSS: " + str(loss_triplet.item()))
 
         return loss_triplet
+
+    def compute_barlow_twins_loss(self, feature1, feature2, lambd=0.0051):
+        feature1 = feature1.view(-1, feature1.shape[2])
+        feature2 = feature2.view(-1, feature2.shape[2])
+        bt = BarlowTwins(feature1.shape[0], feature1.shape[1], lambd).cuda()
+        loss = bt.forward(feature1, feature2)
+        return loss
 
     def compute_cpc_obj(self, pred, features, cpc_amount=(10, 30), cpc_contrast='window'):
 
