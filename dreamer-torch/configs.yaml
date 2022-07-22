@@ -46,6 +46,7 @@ defaults:
   discount_layers: 3
   value_layers: 3
   actor_layers: 4
+  cpc_layers: 4
   act: 'ELU'
   cnn_depth: 32
   encoder_kernels: [4, 4, 4, 4]
@@ -125,6 +126,8 @@ defaults:
 
   #Contrastive
   contrastive: Null
+  cpc_batch_amount: 10
+  cpc_time_amount: 30
 
   # Wandb
   wandb_api_key: 'fd1a595a3c1caa35b1f907727fb99c479fcf59ae'
