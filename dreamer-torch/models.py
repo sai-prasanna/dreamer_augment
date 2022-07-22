@@ -115,7 +115,7 @@ class WorldModel(nn.Module):
                             likes[name] += self.compute_cpc_obj(pred_aug, feat_aug, cpc_amount)
                             likes[name] += self.compute_cpc_obj(pred_aug, feat_noaug, cpc_amount)
                             likes[name] += self.compute_cpc_obj(pred_noaug, feat_aug, cpc_amount)
-                        likes[name] /= 4
+                            likes[name] /= 4
                         losses[name] = -torch.mean(likes[name])
 
                     else:
