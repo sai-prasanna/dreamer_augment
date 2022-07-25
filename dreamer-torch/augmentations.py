@@ -8,25 +8,28 @@ import torch.nn as nn
 class Augmentation(nn.Module):
     def __init__(
             self,
+            rand_crop: bool,
             strong: bool,
             consistent: bool,
             pad: int = 4,
             image_size: int = 64
     ) -> None:
         super().__init__()
-        self.random_crop = K.VideoSequential(
-            K.RandomCrop((image_size, image_size), padding=pad, padding_mode='replicate'))
+        self.random_crop = None
+        if rand_crop:
+            self.random_crop = K.VideoSequential(
+                K.RandomCrop((image_size, image_size), padding=pad, padding_mode='replicate'))
         self.strong_transform = None
         if strong:
             self.strong_transform = [
-                K.RandomRotation(5, p=1 / 8),
-                K.RandomSharpness((0, 1.0), p=1 / 8),
-                K.RandomPosterize((3, 8), p=1 / 8),
-                K.RandomSolarize(0.1, p=1 / 8),
-                K.RandomEqualize(p=1 / 8),
-                K.ColorJiggle(brightness=(0.4, 1.4), p=1 / 8),
-                K.ColorJiggle(saturation=(0.4, 1.4), p=1 / 8),
-                K.ColorJiggle(contrast=(0.4, 1.4), p=1 / 8),
+                #K.RandomRotation(5, p=1 / 8),
+                K.RandomSharpness((0, 1.0), p=1 / 7),
+                K.RandomPosterize((3, 8), p=1 / 7),
+                K.RandomSolarize(0.1, p=1 / 7),
+                K.RandomEqualize(p=1 / 7),
+                K.ColorJiggle(brightness=(0.4, 1.4), p=1 / 7),
+                K.ColorJiggle(saturation=(0.4, 1.4), p=1 / 7),
+                K.ColorJiggle(contrast=(0.4, 1.4), p=1 / 7),
             ]
             # Strong augmentations are always consistent across timesteps
             self.strong_transfom_fn = K.VideoSequential(*self.strong_transform, same_on_frame=True)
@@ -36,11 +39,12 @@ class Augmentation(nn.Module):
         X = X.permute(0, 1, 4, 2, 3)
         X = X + 0.5 # The image should be in range 0 to 1.0 for strong transforms
         orig_shape = X.shape
-        if self.consistent_crop:
-            X = self.random_crop(X.reshape(orig_shape[0], 1, orig_shape[1] * orig_shape[2], *orig_shape[3:])).view(
-                orig_shape).contiguous()
-        else:
-            X = self.random_crop(X).contiguous()
+        if self.random_crop:
+            if self.consistent_crop:
+                X = self.random_crop(X.reshape(orig_shape[0], 1, orig_shape[1] * orig_shape[2], *orig_shape[3:])).view(
+                    orig_shape).contiguous()
+            else:
+                X = self.random_crop(X).contiguous()
         if self.strong_transform:
             X = self.strong_transfom_fn(X)
         X = X - 0.5

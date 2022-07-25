@@ -120,6 +120,7 @@ defaults:
 
   # Augmentation
   augment: False
+  augment_random_crop: True
   augment_strong: False
   augment_pad: 4
   augment_consistent: True
