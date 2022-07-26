@@ -225,6 +225,7 @@ def process_episode(config, logger, mode, train_eps, eval_eps, episode):
 
 
 def main(config):
+  max_reward = 0
   logdir = pathlib.Path(config.logdir).expanduser()
   config.traindir = config.traindir or logdir / 'train_eps'
   config.evaldir = config.evaldir or logdir / 'eval_eps'
@@ -236,10 +237,10 @@ def main(config):
 
   print('Logdir', logdir)
   logdir.mkdir(parents=True, exist_ok=True)
-  if config.wandb_api_key:
-    os.environ["WANDB_API_KEY"] = config.wandb_api_key
-    wandb.init(name=config.wandb_name, entity=config.wandb_entity, project=config.wandb_project, dir=str(logdir), config=vars(config))
-    wandb.tensorboard.patch(root_logdir=str(logdir))
+  # if config.wandb_api_key:
+  #   os.environ["WANDB_API_KEY"] = config.wandb_api_key
+  #   wandb.init(name=config.wandb_name, entity=config.wandb_entity, project=config.wandb_project, dir=str(logdir), config=vars(config))
+  #   wandb.tensorboard.patch(root_logdir=str(logdir))
   config.traindir.mkdir(parents=True, exist_ok=True)
   config.evaldir.mkdir(parents=True, exist_ok=True)
   step = count_steps(config.traindir)
@@ -278,9 +279,8 @@ def main(config):
       return {'action': action, 'logprob': logprob}, None
     tools.simulate(random_agent, train_envs, prefill)
     tools.simulate(random_agent, eval_envs, episodes=1)
-    logger.step = config.action_repeat * count_steps(config.traindir)
 
-  print('Simulate agent.')
+
   train_dataset = make_dataset(train_eps, config)
   eval_dataset = make_dataset(eval_eps, config)
   agent = Dreamer(config, logger, train_dataset).to(config.device)
@@ -296,7 +296,12 @@ def main(config):
     video_pred = agent._wm.video_pred(next(eval_dataset))
     logger.video('eval_openl', to_np(video_pred))
     eval_policy = functools.partial(agent, training=False)
-    tools.simulate(eval_policy, eval_envs, episodes=1)
+    eval_sim = tools.simulate(eval_policy, eval_envs, episodes=1)
+    reward_eval = sum(eval_sim[-1])
+    print(f'current reward eval is {reward_eval}')
+    max_reward = max_reward if reward_eval < max_reward else reward_eval
+    logger.step = config.action_repeat * count_steps(config.traindir)
+
     print('Start training.')
     state = tools.simulate(agent, train_envs, config.eval_every, state=state)
     torch.save(agent.state_dict(), logdir / 'latest_model.pt')
@@ -305,12 +310,14 @@ def main(config):
       env.close()
     except Exception:
       pass
-
+  return max_reward
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--configs', nargs='+', required=True)
   args, remaining = parser.parse_known_args()
+  print('known args', args)
+  print(remaining, 'remaining')
   configs = yaml.safe_load(
       (pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
   defaults = {}

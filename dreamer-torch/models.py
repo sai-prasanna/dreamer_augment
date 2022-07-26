@@ -101,22 +101,26 @@ class WorldModel(nn.Module):
                     feat = feat if grad_head else feat.detach()
 
                     if name == 'cpc' and (self._config.contrastive == 'cpc' or self._config.contrastive == 'cpc_augment'):
-                        embed_noaug = self.encoder({'image': data['image']})
-                        post_noaug, _ = self.dynamics.observe(embed_noaug, data['action'])
-                        feat_noaug = self.dynamics.get_feat(post_noaug)
-                        pred_noaug = head(embed_noaug)
                         cpc_amount = (self._config.cpc_batch_amount, self._config.cpc_time_amount)
-                        likes[name] = self.compute_cpc_obj(pred_noaug, feat_noaug, cpc_amount)
+                        pred_aug = head(embed)
+                        feat_aug = feat
+                        likes[name] = self.compute_cpc_obj(pred_aug, feat_aug, cpc_amount)
 
                         if self._config.contrastive == 'cpc_augment':
+
                             assert self.augment is not None, 'Augmenting should be on'
-                            pred_aug = head(embed)
-                            feat_aug = feat
+                            #in that case we need to addd the original part without augmentation
+                            #other than that we can use the previous stuff already
+                            embed_noaug = self.encoder({'image': data['image']})
+                            post_noaug, _ = self.dynamics.observe(embed_noaug, data['action'])
+                            feat_noaug = self.dynamics.get_feat(post_noaug)
+                            pred_noaug = head(embed_noaug)
                             likes[name] += self.compute_cpc_obj(pred_aug, feat_aug, cpc_amount)
                             likes[name] += self.compute_cpc_obj(pred_aug, feat_noaug, cpc_amount)
                             likes[name] += self.compute_cpc_obj(pred_noaug, feat_aug, cpc_amount)
-                        likes[name] /= 4
-                        losses[name] = -torch.mean(likes[name])
+                            likes[name] /= 4
+
+                        losses[name] = -torch.mean(likes[name]) * self._scales.get(name, 1.0)
 
                     else:
                         pred = head(feat)
