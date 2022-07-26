@@ -1,7 +1,5 @@
 import torch
 from torch import nn
-import numpy as np
-from PIL import ImageColor, Image, ImageDraw, ImageFont
 
 import augmentations
 import networks
@@ -80,7 +78,7 @@ class WorldModel(nn.Module):
             config.weight_decay, opt=config.opt,
             use_amp=self._use_amp)
         self._scales = dict(
-            reward=config.reward_scale, discount=config.discount_scale)
+            reward=config.reward_scale, discount=config.discount_scale, cpc_scale=config.cpc_scale)
 
     def _update_curl_target(self):
         if not self._config.curl:
@@ -134,23 +132,26 @@ class WorldModel(nn.Module):
                     feat = self.dynamics.get_feat(post)
                     feat = feat if grad_head else feat.detach()
 
-                    if name == 'cpc' and (self._config.contrastive == 'cpc' or self._config.contrastive == 'cpc_augment'):
-                        embed_noaug = self.encoder({'image': data['image']})
-                        post_noaug, _ = self.dynamics.observe(embed_noaug, data['action'])
-                        feat_noaug = self.dynamics.get_feat(post_noaug)
-                        pred_noaug = head(embed_noaug)
+                    if name == 'cpc' and (
+                            self._config.contrastive == 'cpc' or self._config.contrastive == 'cpc_augment'):
                         cpc_amount = (self._config.cpc_batch_amount, self._config.cpc_time_amount)
-                        likes[name] = self.compute_cpc_obj(pred_noaug, feat_noaug, cpc_amount)
+                        pred_aug = head(embed)
+                        feat_aug = feat
+                        likes[name] = self.compute_cpc_obj(pred_aug, feat_aug, cpc_amount)
 
                         if self._config.contrastive == 'cpc_augment':
                             assert self.augment is not None, 'Augmenting should be on'
-                            pred_aug = head(embed)
-                            feat_aug = feat
+                            # in that case we need to addd the original part without augmentation
+                            # other than that we can use the previous stuff already
+                            embed_noaug = self.encoder({'image': data['image']})
+                            post_noaug, _ = self.dynamics.observe(embed_noaug, data['action'])
+                            feat_noaug = self.dynamics.get_feat(post_noaug)
+                            pred_noaug = head(embed_noaug)
                             likes[name] += self.compute_cpc_obj(pred_aug, feat_aug, cpc_amount)
                             likes[name] += self.compute_cpc_obj(pred_aug, feat_noaug, cpc_amount)
                             likes[name] += self.compute_cpc_obj(pred_noaug, feat_aug, cpc_amount)
                             likes[name] /= 4
-                        losses[name] = -torch.mean(likes[name])
+                        losses[name] = -torch.mean(likes[name]) * self._scales.get(name, 1.0)
 
                     else:
                         pred = head(feat)
@@ -244,6 +245,13 @@ class WorldModel(nn.Module):
         # print("TRIPLET LOSS: " + str(loss_triplet.item()))
 
         return loss_triplet
+
+    def compute_barlow_twins_loss(self, feature1, feature2, lambd=0.0051):
+        feature1 = feature1.view(-1, feature1.shape[2])
+        feature2 = feature2.view(-1, feature2.shape[2])
+        bt = BarlowTwins(feature1.shape[0], feature1.shape[1], lambd).cuda()
+        loss = bt.forward(feature1, feature2)
+        return loss
 
     def compute_cpc_obj(self, pred, features, cpc_amount=(10, 30), cpc_contrast='window'):
 
