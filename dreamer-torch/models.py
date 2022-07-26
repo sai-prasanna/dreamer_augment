@@ -24,7 +24,7 @@ class WorldModel(nn.Module):
             self._config.grad_heads = [h for h in self._config.grad_heads if h != 'image']
             print("disable image gradinent to the RSSM")
         if config.augment:
-            self.augment = augmentations.Augmentation(config.augment_strong, config.augment_consistent,
+            self.augment = augmentations.Augmentation(config.augment_random_crop, config.augment_strong, config.augment_consistent,
                                                       config.augment_pad, config.size[0])
         self.encoder = networks.ConvEncoder(config.grayscale,
                                             config.cnn_depth, config.act, config.encoder_kernels)
@@ -119,7 +119,6 @@ class WorldModel(nn.Module):
                             likes[name] += self.compute_cpc_obj(pred_aug, feat_noaug, cpc_amount)
                             likes[name] += self.compute_cpc_obj(pred_noaug, feat_aug, cpc_amount)
                             likes[name] /= 4
-
                         losses[name] = -torch.mean(likes[name]) * self._scales.get(name, 1.0)
 
                     else:
