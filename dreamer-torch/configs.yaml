@@ -60,6 +60,7 @@ defaults:
   pred_discount: False
   discount_scale: 1.0
   reward_scale: 1.0
+  cpc_scale: 1.0
   weight_decay: 0.0
 
   # Training

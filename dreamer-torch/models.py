@@ -73,7 +73,7 @@ class WorldModel(nn.Module):
             config.weight_decay, opt=config.opt,
             use_amp=self._use_amp)
         self._scales = dict(
-            reward=config.reward_scale, discount=config.discount_scale)
+            reward=config.reward_scale, discount=config.discount_scale, cpc_scale=config.cpc_scale)
 
     def _train(self, data):
 
