@@ -22,6 +22,7 @@ import wandb
 import torch
 from torch import nn
 from torch import distributions as torchd
+from torchvision.transforms import Resize
 to_np = lambda x: x.detach().cpu().numpy()
 
 
@@ -90,6 +91,11 @@ class Dreamer(nn.Module):
     return policy_output, state
 
   def _policy(self, obs, state, training):
+    if self._config.curl:
+      images = torch.tensor(obs['image'], device=self._config.device)
+      orig_size = images.size()
+      resized_images = tools.center_crop_image(images.permute(0, 3, 1, 2), self._config.augment_crop_size).permute(0, 2, 3, 1)
+      obs['image'] = resized_images
     if state is None:
       batch_size = len(obs['image'])
       latent = self._wm.dynamics.initial(len(obs['image']))

@@ -123,7 +123,12 @@ defaults:
   augment_random_crop: True
   augment_strong: False
   augment_pad: 4
+  augment_crop_size: [64, 64]
   augment_consistent: True
+
+  # CURL
+  curl: False
+  curl_target_fraction: 0.01
 
   #Contrastive
   contrastive: Null

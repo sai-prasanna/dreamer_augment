@@ -6,7 +6,8 @@ from PIL import ImageColor, Image, ImageDraw, ImageFont
 import augmentations
 import networks
 import tools
-from tools import FeatureTripletBuilder, distance
+from tools import FeatureTripletBuilder, center_crop_image, distance, BarlowTwins
+from torchvision.transforms import Resize
 
 to_np = lambda x: x.detach().cpu().numpy()
 
@@ -25,17 +26,23 @@ class WorldModel(nn.Module):
             print("disable image gradinent to the RSSM")
         if config.augment:
             self.augment = augmentations.Augmentation(config.augment_random_crop, config.augment_strong, config.augment_consistent,
-                                                      config.augment_pad, config.size[0])
+                                                      config.augment_pad, config.augment_crop_size)
         self.encoder = networks.ConvEncoder(config.grayscale,
                                             config.cnn_depth, config.act, config.encoder_kernels)
-        if self._config.contrastive == "triplet":
-            self.triplet = True
-            print("triplet activated")
-        if config.size[0] == 64 and config.size[1] == 64:
+
+        selected_size = config.augment_crop_size if config.curl else config.size
+        if selected_size[0] == 64 and selected_size[1] == 64:
             embed_size = 2 ** (len(config.encoder_kernels) - 1) * config.cnn_depth
             embed_size *= 2 * 2
         else:
-            raise NotImplemented(f"{config.size} is not applicable now")
+            raise NotImplemented(f"{self.selected_size} is not applicable now")
+
+        if self._config.curl:
+            self.curl_target = networks.ConvEncoder(config.grayscale,
+                                            config.cnn_depth, config.act, config.encoder_kernels)
+            self.curl_target.load_state_dict(self.encoder.state_dict())
+            self.curl_W = nn.Parameter(torch.rand(embed_size, embed_size))
+            self.curl_target_update = 0
         self.dynamics = networks.RSSM(
             config.dyn_stoch, config.dyn_deter, config.dyn_hidden,
             config.dyn_input_layers, config.dyn_output_layers,
@@ -45,7 +52,7 @@ class WorldModel(nn.Module):
             config.num_actions, embed_size, config.device)
         self.heads = nn.ModuleDict()
         channels = (1 if config.grayscale else 3)
-        shape = (channels,) + config.size
+        shape = (channels,) + selected_size
         if config.dyn_discrete:
             feat_size = config.dyn_stoch * config.dyn_discrete + config.dyn_deter
         else:
@@ -75,8 +82,15 @@ class WorldModel(nn.Module):
         self._scales = dict(
             reward=config.reward_scale, discount=config.discount_scale)
 
-    def _train(self, data):
+    def _update_curl_target(self):
+        if not self._config.curl:
+            return
+        if self.curl_target_update % 2 == 0:
+            soft_update_params(self.encoder, self.curl_target, self._config.curl_target_fraction)
+        self.curl_target_update += 1
 
+    def _train(self, data):
+        metrics = {}
         data = self.preprocess(data)
 
         with tools.RequiresGrad(self):
@@ -87,6 +101,26 @@ class WorldModel(nn.Module):
                     obs = self.augment(obs)
 
                 embed = self.encoder({'image': obs})
+                curl_loss = 0.0
+                if self._config.curl:
+                    obs2 = self.augment(data['image'])
+                    with torch.no_grad():
+                        aug_embed = self.curl_target({'image': obs2})
+                    z_a = embed.view(-1, *embed.shape[2:])
+                    z_pos = aug_embed.view(-1, *aug_embed.shape[2:])
+                    # za: B x embed W: embed x embed z_pos: embed x Batch
+                    Wz = torch.matmul(self.curl_W, z_pos.T)  # (z_dim,B)
+                    logits = torch.matmul(z_a, Wz)  # (B,B)
+                    logits = logits - torch.max(logits, 1)[0][:, None]
+                    labels = torch.arange(logits.shape[0]).long().to(self._config.device)
+                    curl_loss = nn.CrossEntropyLoss()(logits, labels)
+                    metrics['curl_loss'] = to_np(curl_loss)
+
+                    orig_size = data['image'].size()
+                    images = data['image'].view(-1, *orig_size[2:])
+                    resized_images = tools.center_crop_image(images.permute(0, 3, 1, 2), self._config.augment_crop_size).permute(0, 2, 3, 1)
+                    data['image'] = resized_images.view((orig_size[0], orig_size[1], *resized_images.shape[1:]))
+
                 post, prior = self.dynamics.observe(embed, data['action'])
                 kl_balance = tools.schedule(self._config.kl_balance, self._step)
                 kl_free = tools.schedule(self._config.kl_free, self._step)
@@ -123,22 +157,27 @@ class WorldModel(nn.Module):
                         like = pred.log_prob(data[name])
                         likes[name] = like
                         losses[name] = -torch.mean(like) * self._scales.get(name, 1.0)
-
-                if self.triplet:
+                contrastive_loss = 0.0
+                if self._config.contrastive == "barlow_twins":
+                    feat = self.dynamics.get_feat(post)
+                    embed2 = self.encoder({'image': self.augment(data['image'])})
+                    post2, prior2 = self.dynamics.observe(embed2, data['action'])
+                    feat2 = self.dynamics.get_feat(post2)
+                    contrastive_loss = self.compute_barlow_twins_loss(feat,feat2)
+                    metrics.update({'barlow_twins_loss': to_np(contrastive_loss)})
+                elif self._config.contrastive == 'triplet':
                     feat = self.dynamics.get_feat(post)
                     embed2 = self.encoder({'image': self.augment(data['image'])})
                     post2, prior2 = self.dynamics.observe(embed2, data['action'])
                     feat2 = self.dynamics.get_feat(post2)
                     feat = feat.view(-1, feat.shape[2])
                     feat2 = feat2.view(-1, feat2.shape[2])
-                    triplet_loss = self.compute_triplet_loss(feat, feat2)
-                if self.triplet:
-                    model_loss = sum(losses.values()) + kl_loss + triplet_loss
-                else:
-                    model_loss = sum(losses.values()) + kl_loss
-            metrics = self._model_opt(model_loss, self.parameters())
-        if self.triplet:
-            metrics.update({'triplet_loss': to_np(triplet_loss)})
+                    contrastive_loss = self.compute_triplet_loss(feat, feat2)
+                    metrics.update({'triplet_loss': to_np(contrastive_loss)})
+                model_loss = sum(losses.values()) + kl_loss + contrastive_loss + curl_loss
+            metrics.update(self._model_opt(model_loss, self.parameters()))
+        self._update_curl_target()
+            
         metrics.update({f'{name}_loss': to_np(loss) for name, loss in losses.items()})
         metrics['kl_balance'] = kl_balance
         metrics['kl_free'] = kl_free
@@ -169,6 +208,12 @@ class WorldModel(nn.Module):
         return obs
 
     def video_pred(self, data):
+        if self._config.augment_crop_size != self._config.size:
+            data['image'] = torch.Tensor(data['image']).to(self._config.device)
+            orig_size = data['image'].size()
+            images = data['image'].view(-1, *orig_size[2:])
+            resized_images = tools.center_crop_image(images.permute(0, 3, 1, 2), self._config.augment_crop_size).permute(0, 2, 3, 1)
+            data['image'] = resized_images.view((orig_size[0], orig_size[1], *resized_images.shape[1:]))
         data = self.preprocess(data)
         truth = data['image'][:6] + 0.5
         embed = self.encoder(data)
@@ -406,3 +451,9 @@ class ImagBehavior(nn.Module):
                 for s, d in zip(self.value.parameters(), self._slow_value.parameters()):
                     d.data = mix * s.data + (1 - mix) * d.data
             self._updates += 1
+
+def soft_update_params(net, target_net, tau):
+    for param, target_param in zip(net.parameters(), target_net.parameters()):
+        target_param.data.copy_(
+            tau * param.data + (1 - tau) * target_param.data
+        )
