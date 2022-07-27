@@ -160,3 +160,11 @@ cython_debug/
 #.idea/
 
 dmc/**
+**/wandb/**
+xmagical/**
+dmc_old_logs/**
+dreamer/rad/**
+dmc1/**
+dmc_test
+**/DAVIS/**
+DAVIS-*.zip
