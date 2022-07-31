@@ -160,3 +160,16 @@ cython_debug/
 #.idea/
 
 dmc/**
+
+data/**
+
+dreamer-torch/data/**
+
+dmc1/**
+
+dreamer-torch/DAVIS/**
+
+dreamer-torch/wandb/**
+
+wandb/**
+
