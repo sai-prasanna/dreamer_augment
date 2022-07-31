@@ -203,7 +203,7 @@ def make_env(config, mode, distractor_env):
 
 def main(config):
     root_dir = pathlib.Path(config.logdir)
-    logdir = root_dir / "evaluation"
+    logdir = root_dir / "evaluation_distracting"
     config.steps //= config.action_repeat
     config.eval_every //= config.action_repeat
     config.log_every //= config.action_repeat
