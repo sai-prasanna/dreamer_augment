@@ -60,10 +60,11 @@ defaults:
   pred_discount: False
   discount_scale: 1.0
   reward_scale: 1.0
+  cpc_scale: 1.0
   weight_decay: 0.0
 
   # Training
-  batch_size: 156
+  batch_size: 50
   batch_length: 50
   train_every: 5
   train_steps: 1
@@ -123,7 +124,12 @@ defaults:
   augment_random_crop: True
   augment_strong: False
   augment_pad: 4
+  augment_crop_size: [64, 64]
   augment_consistent: True
+
+  # CURL
+  curl: False
+  curl_target_fraction: 0.01
 
   #Contrastive
   contrastive: Null

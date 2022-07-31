@@ -1,7 +1,9 @@
+import pathlib
 import threading
 
 import gym
 import numpy as np
+from distracting_control import suite_utils
 
 
 class DeepMindLabyrinth(object):
@@ -106,13 +108,38 @@ class DeepMindLabyrinth(object):
 
 class DeepMindControl:
 
-  def __init__(self, name, action_repeat=1, size=(64, 64), camera=None):
+  def __init__(self, name, action_repeat=1, size=(64, 64), camera=None, distractor_env: str = '',dynamic=False):
     domain, task = name.split('_', 1)
     if domain == 'cup':  # Only domain with multiple words.
       domain = 'ball_in_cup'
     if isinstance(domain, str):
-      from dm_control import suite
-      self._env = suite.load(domain, task)
+      if distractor_env:
+        from distracting_control import suite as d_suite
+        path = pathlib.Path(__file__).parent / 'DAVIS'/'JPEGImages'/'480p'
+        if not path.exists():
+          raise ValueError('Run `wget https://data.vision.ee.ethz.ch/csergi/share/davis/DAVIS-2017-trainval-480p.zip` inside dreamer-torch folder and unzip DAVIS-2017-trainval-480p.zip')
+        #get final_background_kwargs
+        final_background_kwargs = dict()        
+        num_videos = suite_utils.DIFFICULTY_NUM_VIDEOS[distractor_env]
+        background_dataset_videos = "train"
+        final_background_kwargs.update(
+            suite_utils.get_background_kwargs(domain, num_videos, dynamic,
+                                              str(path),
+                                              background_dataset_videos))
+        final_background_kwargs.update(
+            dict(
+                dataset_path=str(path),
+                dataset_videos=background_dataset_videos))        
+        #get color_kwargs
+        final_color_kwargs = dict()
+        scale = suite_utils.DIFFICULTY_SCALE[distractor_env]
+        final_color_kwargs.update(suite_utils.get_color_kwargs(scale, dynamic))        
+        
+        self._env = d_suite.load(domain, task, background_kwargs=final_background_kwargs, color_kwargs=final_color_kwargs, distraction_types=('background', 'color'), background_dataset_path=str(path))
+      
+      else:
+        from dm_control import suite
+        self._env = suite.load(domain, task)
     else:
       assert task is None
       self._env = domain()

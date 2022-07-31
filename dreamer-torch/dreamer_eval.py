@@ -3,6 +3,7 @@ import collections
 import functools
 import os
 import pathlib
+import random
 import sys
 import warnings
 
@@ -17,6 +18,7 @@ import exploration as expl
 import models
 import tools
 import wrappers
+
 
 import wandb
 import torch
@@ -39,7 +41,7 @@ class Dreamer(nn.Module):
     self._should_expl = tools.Until(int(
         config.expl_until / config.action_repeat))
     self._metrics = {}
-    self._step = count_steps(config.traindir)
+    self._step = 0
     # Schedules.
     config.actor_entropy = (
         lambda x=config.actor_entropy: tools.schedule(x, self._step))
@@ -172,10 +174,10 @@ def make_dataset(episodes, config):
     return dataset
 
 
-def make_env(config, logger, mode, train_eps, eval_eps):
+def make_env(config, mode, distractor_env):
     suite, task = config.task.split('_', 1)
     if suite == 'dmc':
-        env = wrappers.DeepMindControl(task, config.action_repeat, config.size)
+        env = wrappers.DeepMindControl(task, config.action_repeat, config.size, None, distractor_env)
         env = wrappers.NormalizeActions(env)
     elif suite == 'atari':
         env = wrappers.Atari(
@@ -195,45 +197,13 @@ def make_env(config, logger, mode, train_eps, eval_eps):
         raise NotImplementedError(suite)
     env = wrappers.TimeLimit(env, config.time_limit)
     env = wrappers.SelectAction(env, key='action')
-    if (mode == 'train') or (mode == 'eval'):
-        callbacks = [functools.partial(
-            process_episode, config, logger, mode, train_eps, eval_eps)]
-        env = wrappers.CollectDataset(env, callbacks)
     env = wrappers.RewardObs(env)
     return env
 
 
-def process_episode(config, logger, mode, train_eps, eval_eps, episode):
-    directory = dict(train=config.traindir, eval=config.evaldir)[mode]
-    cache = dict(train=train_eps, eval=eval_eps)[mode]
-    filename = tools.save_episodes(directory, [episode])[0]
-    length = len(episode['reward']) - 1
-    score = float(episode['reward'].astype(np.float64).sum())
-    video = episode['image']
-    if mode == 'eval':
-        cache.clear()
-    if mode == 'train' and config.dataset_size:
-        total = 0
-        for key, ep in reversed(sorted(cache.items(), key=lambda x: x[0])):
-            if total <= config.dataset_size - length:
-                total += len(ep['reward']) - 1
-            else:
-                del cache[key]
-        logger.scalar('dataset_size', total + length)
-    cache[str(filename)] = episode
-    print(f'{mode.title()} episode has {length} steps and return {score:.1f}.')
-    logger.scalar(f'{mode}_return', score)
-    logger.scalar(f'{mode}_length', length)
-    logger.scalar(f'{mode}_episodes', len(cache))
-    if mode == 'eval' or config.expl_gifs:
-        logger.video(f'{mode}_policy', video[None])
-    logger.write()
-
-
 def main(config):
-    logdir = pathlib.Path(config.logdir).expanduser()
-    config.traindir = config.traindir or logdir / 'train_eps'
-    config.evaldir = config.evaldir or logdir / 'eval_eps'
+    root_dir = pathlib.Path(config.logdir)
+    logdir = root_dir / "evaluation"
     config.steps //= config.action_repeat
     config.eval_every //= config.action_repeat
     config.log_every //= config.action_repeat
@@ -247,74 +217,59 @@ def main(config):
         wandb.init(name=config.wandb_name, entity=config.wandb_entity, project=config.wandb_project, dir=str(logdir),
                    config=vars(config))
         wandb.tensorboard.patch(root_logdir=str(logdir))
-    config.traindir.mkdir(parents=True, exist_ok=True)
-    config.evaldir.mkdir(parents=True, exist_ok=True)
-    step = count_steps(config.traindir)
-    logger = tools.Logger(logdir, config.action_repeat * step)
-
-    print('Create envs.')
-    if config.offline_traindir:
-        directory = config.offline_traindir.format(**vars(config))
-    else:
-        directory = config.traindir
-    train_eps = tools.load_episodes(directory, limit=config.dataset_size)
-    if config.offline_evaldir:
-        directory = config.offline_evaldir.format(**vars(config))
-    else:
-        directory = config.evaldir
-    eval_eps = tools.load_episodes(directory, limit=1)
-    make = lambda mode: make_env(config, logger, mode, train_eps, eval_eps)
-    train_envs = [make('train') for _ in range(config.envs)]
+    
+    logger = tools.Logger(logdir, 0)
+    make = lambda mode: make_env(config, mode, '')
     eval_envs = [make('eval') for _ in range(config.envs)]
-    acts = train_envs[0].action_space
+    acts = eval_envs[0].action_space
     config.num_actions = acts.n if hasattr(acts, 'n') else acts.shape[0]
+    agent = Dreamer(config, logger, None).to(config.device)
 
-    if not config.offline_traindir:
-        prefill = max(0, config.prefill - count_steps(config.traindir))
-        print(f'Prefill dataset ({prefill} steps).')
-        if hasattr(acts, 'discrete'):
-            random_actor = tools.OneHotDist(torch.zeros_like(torch.Tensor(acts.low))[None])
-        else:
-            random_actor = torchd.independent.Independent(
-                torchd.uniform.Uniform(torch.Tensor(acts.low)[None],
-                                       torch.Tensor(acts.high)[None]), 1)
-
-        def random_agent(o, d, s, r):
-            action = random_actor.sample()
-            logprob = random_actor.log_prob(action)
-            return {'action': action, 'logprob': logprob}, None
-
-        tools.simulate(random_agent, train_envs, prefill)
-        tools.simulate(random_agent, eval_envs, episodes=1)
-        logger.step = config.action_repeat * count_steps(config.traindir)
-
-    print('Simulate agent.')
-
-    train_dataset = make_dataset(train_eps, config)
-    eval_dataset = make_dataset(eval_eps, config)
-    agent = Dreamer(config, logger, train_dataset).to(config.device)
     agent.requires_grad_(requires_grad=False)
-    if (logdir / 'latest_model.pt').exists():
-        agent.load_state_dict(torch.load(logdir / 'latest_model.pt'))
+    if (logdir / '..' / 'latest_model.pt').exists():
+        agent.load_state_dict(torch.load(logdir / '..' / 'latest_model.pt'))
         agent._should_pretrain._once = False
+    eval_policy = functools.partial(agent, training=False)
 
-    state = None
-    while agent._step < config.steps:
-        logger.write()
-        print('Start evaluation.')
-        video_pred = agent._wm.video_pred(next(eval_dataset))
-        logger.video('eval_openl', to_np(video_pred))
-        eval_policy = functools.partial(agent, training=False)
-        tools.simulate(eval_policy, eval_envs, episodes=1)
-        print('Start training.')
-        state = tools.simulate(agent, train_envs, config.eval_every, state=state)
-        torch.save(agent.state_dict(), logdir / 'latest_model.pt')
-    for env in train_envs + eval_envs:
+    for distractor_env in ['easy', 'medium', 'hard', '']:
+      eval_env = make_env(config, 'eval', distractor_env)
+      eps_return_mean = 0
+      episodes = []
+      for _ in range(5):
+        eval_return, obses = evaluate_one_episode(eval_policy, eval_env)
+        eps_return_mean += eval_return / 5
+        episodes.append(obses['image'])
+      episode_to_log = random.choice(episodes)
+      logger.video(f'eval_{distractor_env}', episode_to_log[None])
+      logger.scalar(f'eval_mean_return_{distractor_env}', float(eps_return_mean))
+      logger.write()
+    for env in  eval_envs:
         try:
             env.close()
         except Exception:
             pass
 
+
+def evaluate_one_episode(agent, env):
+  # Initialize or unpack simulation state.
+  done = False
+  obs = env.reset()
+  agent_state = None
+  eps_return = 0
+  obses = [obs]
+  reward = 0
+  while not done:
+    # Step agents.
+    obs = {k: np.stack([v]) for k, v  in obs.items()}
+    action, agent_state = agent(obs, np.array([done]), agent_state, np.array([reward]))
+    if isinstance(action, dict):
+      action = {k: np.array(action[k][0].detach().cpu()) for k in action}
+    # Step envs.
+    obs, reward, done, _ = env.step(action)
+    eps_return += reward
+    obses.append(obs)
+  obses = {k: np.stack([frame[k] for frame in obses]) for k in obses[0].keys()}
+  return eps_return, obses
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

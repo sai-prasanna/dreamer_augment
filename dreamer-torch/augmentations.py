@@ -12,13 +12,14 @@ class Augmentation(nn.Module):
             strong: bool,
             consistent: bool,
             pad: int = 4,
-            image_size: int = 64
+            image_size: int = (64, 64)
     ) -> None:
         super().__init__()
         self.random_crop = None
         if rand_crop:
+            print(image_size)
             self.random_crop = K.VideoSequential(
-                K.RandomCrop((image_size, image_size), padding=pad, padding_mode='replicate'))
+                K.RandomCrop((image_size[0], image_size[1]), padding=pad, padding_mode='replicate'))
         self.strong_transform = None
         if strong:
             self.strong_transform = [
@@ -41,8 +42,9 @@ class Augmentation(nn.Module):
         orig_shape = X.shape
         if self.random_crop:
             if self.consistent_crop:
-                X = self.random_crop(X.reshape(orig_shape[0], 1, orig_shape[1] * orig_shape[2], *orig_shape[3:])).view(
-                    orig_shape).contiguous()
+                X = X.reshape(orig_shape[0], 1, orig_shape[1] * orig_shape[2], *orig_shape[3:])
+                X = self.random_crop(X)
+                X = X.view(orig_shape[0], orig_shape[1], orig_shape[2], *X.shape[3:]).contiguous()
             else:
                 X = self.random_crop(X).contiguous()
         if self.strong_transform:
