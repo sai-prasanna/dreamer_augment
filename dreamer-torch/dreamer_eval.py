@@ -203,7 +203,7 @@ def make_env(config, mode, distractor_env):
 
 def main(config):
     root_dir = pathlib.Path(config.logdir)
-    logdir = root_dir / "evaluation_distracting"
+    logdir = root_dir / "evaluation_distracting_easy"
     config.steps //= config.action_repeat
     config.eval_every //= config.action_repeat
     config.log_every //= config.action_repeat
@@ -231,19 +231,24 @@ def main(config):
         agent._should_pretrain._once = False
     eval_policy = functools.partial(agent, training=False)
 
-    for distractor_env in ['easy', 'medium', 'hard', '']:
+    for distractor_env in ['easy', '']:#['easy', 'medium', 'hard', '']:
       eval_env = make_env(config, 'eval', distractor_env)
       eps_return_mean = 0
-      episodes = []
-      for _ in range(5):
+      episodes_to_log = []
+      n_episodes = 10
+      eids_to_log = random.choices(list(range(n_episodes)), k=2)
+      for i in range(n_episodes):
         eval_return, obses = evaluate_one_episode(eval_policy, eval_env)
-        eps_return_mean += eval_return / 5
-        episodes.append(obses['image'])
-      episode_to_log = random.choice(episodes)
-      logger.video(f'eval_{distractor_env}', episode_to_log[None])
+        eps_return_mean += eval_return / n_episodes
+        if i in eids_to_log:
+          episodes_to_log.append(obses['image'])
+        if distractor_env != '':
+          eval_env = make_env(config, 'eval', distractor_env)
+      for i, episode in enumerate(episodes_to_log):
+        logger.video(f'eval_{distractor_env}_{i}', episode[None])
       logger.scalar(f'eval_mean_return_{distractor_env}', float(eps_return_mean))
       logger.write()
-    for env in  eval_envs:
+    for env in eval_envs:
         try:
             env.close()
         except Exception:

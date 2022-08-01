@@ -125,7 +125,7 @@ class DeepMindControl:
         final_background_kwargs.update(
             suite_utils.get_background_kwargs(domain, num_videos, dynamic,
                                               str(path),
-                                              background_dataset_videos))
+                                              background_dataset_videos, shuffle=True))
         final_background_kwargs.update(
             dict(
                 dataset_path=str(path),
