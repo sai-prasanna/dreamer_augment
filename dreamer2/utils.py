@@ -1,8 +1,11 @@
+import os
+import gym
 import numpy as np
-from typing import Any
+from typing import Any, Optional, Union
 
 from gym.spaces import Dict as DictSpace
-from gym import Env, ObservationWrapper
+from gym import Env, ObservationWrapper, Wrapper
+from torch import TensorType
 from ray.rllib.utils.framework import try_import_torch
 
 ActFunc = Any
@@ -210,22 +213,3 @@ class FreezeParameters:
     def __exit__(self, exc_type, exc_val, exc_tb):
         for i, param in enumerate(self.parameters):
             param.requires_grad = self.param_states[i]
-
-
-def create_env(env_creator, wrap_obs_key: str, **kwargs):
-    env = env_creator(**kwargs)
-    if isinstance(env.observation_space, DictSpace):
-        return env
-    else:
-        wrapped = DictWrapper(wrap_obs_key, env)
-        return wrapped
-
-class DictWrapper(ObservationWrapper):
-    def __init__(self, wrap_obs_key: str, env: Env) -> None:
-        super().__init__(env)
-        self.wrap_obs_key = wrap_obs_key
-        self.observation_space = DictSpace({self.wrap_obs_key: env.observation_space})
-    def observation(self, obs):
-        return {
-            self.wrap_obs_key: obs
-        }

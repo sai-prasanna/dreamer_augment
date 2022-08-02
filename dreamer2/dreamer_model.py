@@ -1,3 +1,4 @@
+from email import utils
 import functools
 from multiprocessing.sharedctypes import Value
 import re
@@ -447,7 +448,7 @@ class EnsembleRSSM(nn.Module):
         return state
 
     def observe(
-        self, embed: TensorType, action: TensorType, state: List[TensorType] = None
+        self, embed: TensorType, action: TensorType, state: List[TensorType] = None, is_first: TensorType
     ) -> Tuple[Dict[str, TensorType], Dict[str, TensorType]]:
         """Returns the corresponding states from the embedding from ConvEncoder
         and actions. This is accomplished by rolling out the RNN from the
@@ -472,14 +473,14 @@ class EnsembleRSSM(nn.Module):
         if action.dim() <= 2:
             action = torch.unsqueeze(action, 1)
 
-        embed, action = swap(embed), swap(action) # T x B x enc_dim, T x B x action_dim
+        embed, action, is_first  = swap(embed), swap(action), swap(is_first) # T x B x enc_dim, T x B x action_dim
 
         posts = {k: [] for k in state.keys()}
         priors = {k: [] for k in state.keys()}
         last_post, last_prior = (state, state)
         for index in range(len(action)):
             # Tuple of post and prior
-            last_post, last_prior = self.obs_step(last_post, action[index], embed[index])
+            last_post, last_prior = self.obs_step(last_post, action[index], embed[index], is_first)
             for k, v in last_post.items():
                 posts[k].append(v)
             for k, v in last_prior.items():
@@ -505,8 +506,9 @@ class EnsembleRSSM(nn.Module):
         """
         if state is None:
             state = self.get_initial_state(action.size()[0])
+        swap = lambda x: x.permute([1, 0] + list(range(2, len(x.shape))))
 
-        action = action.permute(1, 0, 2)
+        action = swap(action)
 
         indices = range(len(action))
         priors = {k: [] for k in state.keys()}
@@ -516,11 +518,11 @@ class EnsembleRSSM(nn.Module):
             for k, v in last.items():
                 priors[k].append(v)
 
-        prior = {k: torch.stack(v, dim=0).permute(1, 0, 2) for k, v in priors.items()}
+        prior = {k: swap(torch.stack(v, dim=0)) for k, v in priors.items()}
         return prior
 
     def obs_step(
-        self, prev_state: Dict[str, TensorType], prev_action: TensorType, embed: TensorType
+        self, prev_state: Dict[str, TensorType], prev_action: TensorType, embed: TensorType, is_first: TensorType, sample=True
     ) -> Tuple[List[TensorType], List[TensorType]]:
         """Runs through the posterior model and returns the posterior state
 
@@ -532,12 +534,16 @@ class EnsembleRSSM(nn.Module):
         Returns:
             Post and Prior state
         """
+        for k, v in prev_state.items():
+            prev_state[k] = torch.einsum('b,b...->b...', 1.0 - is_first.type(v.dtype), v)
+        prev_action = torch.einsum('b,b...->b...', 1.0 - is_first.type(prev_action.dtype), prev_action)
         prior = self.img_step(prev_state, prev_action)
         x = torch.cat([prior['deter'], embed], dim=-1)
         x = self.obs_layer(x)
         x = self.act()(x)
         stats = self._get_suff_stats(x, self.obs_suff_stats)
-        stoch = self._get_dist(stats).rsample()
+        dist = self._get_dist(stats)
+        stoch = dist.rsample() if sample else dist.mode()
         post = {'stoch': stoch, 'deter': prior['deter'], **stats}
         return post, prior
 
@@ -632,50 +638,53 @@ class DreamerWorldModel(nn.Module):
         self.discount_predictor = None
         if model_config['predict_discount']:
             self.discount_predictor = MLPDistribution(self.dynamics.state_dim, 1, **model_config["discount_head"])
-        
-        self.state_action = None
-
         self.kl = model_config['kl']
         self.loss_scale = model_config['loss_scale']
         self.clip_rewards = model_config['clip_rewards']
 
 
-    def imagine_ahead(self, state: Dict[str, TensorType], policy: Callable[[TensorType], 'td.Distribution'], horizon: int) -> TensorType:
+    def imagine_ahead(self,  policy: Callable[[TensorType], 'td.Distribution'], start_state: Dict[str, TensorType], is_terminal: TensorType, horizon: int) -> TensorType:
         """Given a batch of states, rolls out more state of length horizon."""
-        start = state
-
-        def next_state(state):
-            # No gradient to the world model while imagining
-            feature = self.dynamics.get_feature(state).detach()  
-            action = policy(feature).rsample()
-            next_state = self.dynamics.img_step(state, action)
-            return next_state, action
-        last = start
-        outputs = {k: [] for k in start.keys()}
-        actions = []
+        flatten = lambda x: x.reshape([-1] + list(x.shape[2:]))
+        start = {k: flatten(v) for k, v in start_state.items()}
+        start['feat'] = self.dynamics.get_feature(start)
+        start['action'] = torch.zeros_like(policy(start['feat']).mode())
+        seq = {k: [v] for k, v in start.items()}
         for _ in range(horizon):
-            last, action = next_state(last)
-            actions.append(action)
-            for k in last.keys():
-                outputs[k].append(last[k])
-        for k, v in outputs.items():
-            outputs[k] = torch.stack(v, dim=0) 
-        actions = torch.stack(actions, dim=0)
-        imag_feat = self.dynamics.get_feature(outputs)
-        return imag_feat, actions
+            action = policy(seq['feat'][-1].detach()).rsample()
+            state = self.rssm.img_step({k: v[-1] for k, v in seq.itemss()}, action)
+            feature = self.dynamics.get_feature(state)
+            for key, value in {**state, 'action': action, 'feat': feature}.items():
+                seq[key].append(value)
+
+        seq = {k: torch.stack(v, 0) for k, v in seq.items()}
+        
+        if self.discount_predictor:
+            disc = self.discount_predictor(seq['feat']).mean()
+            if is_terminal is not None:
+                true_first = 1.0 - flatten(is_terminal).astype(disc.dtype)
+                true_first *= self.config.discount
+                disc = torch.concat([true_first[None], disc[1:]], 0)
+        else:
+            disc = self.discount * torch.ones(seq['feat'].shape[:-1])
+        seq['discount'] = disc
+        seq['weight'] = torch.cumprod(
+            torch.cat([torch.ones_like(disc[:1]), disc[:-1]], 0), 0
+        )
+        return seq
 
     def get_initial_state_action(self) -> Tuple[Dict[str, TensorType], TensorType]:
         state = self.dynamics.get_initial_state(1)
         action = torch.zeros(1, self.action_size).to(state['deter'].device)
         return state, action
     
-    def encode_latent(self, previous_state: Dict[str, TensorType], action: TensorType, obs: Dict[str, TensorType]) -> Tuple[Dict[str, TensorType], TensorType]:
+    def encode_latent(self, previous_state: Dict[str, TensorType], action: TensorType, obs: Dict[str, TensorType], explore: bool) -> Tuple[Dict[str, TensorType], TensorType]:
         embed = self.encoder(obs)
-        post, _ = self.dynamics.obs_step(previous_state, action, embed)
+        post, _ = self.dynamics.obs_step(previous_state, action, embed, obs['is_first'], sample=explore)
         feature = self.dynamics.get_feature(post)
         return post, feature
     
-    def compute_states_and_losses(self, obs: Dict[str, TensorType], actions: TensorType, rewards: TensorType, discounts: Optional[TensorType]=None, log_gif: bool = False):
+    def compute_states_and_losses(self, obs: Dict[str, TensorType], actions: TensorType, log_gif: bool = False):
         latent = self.encoder(obs)
         post, prior = self.dynamics.observe(latent, actions)
         features = self.dynamics.get_feature(post)
@@ -689,23 +698,14 @@ class DreamerWorldModel(nn.Module):
             "tanh": lambda x: torch.tanh(x),
             "sign": lambda x: torch.sign(x)
         }[self.clip_rewards](rewards)
-        losses['reward'] =  -reward_pred.log_prob(rewards.unsqueeze(-1)).mean()
+        losses['reward'] =  -reward_pred.log_prob(obs['reward'].unsqueeze(-1)).mean()
 
         if self.discount_predictor:
-            assert discounts is not None
             discount_pred = self.discount_predictor(features)
-            losses['discount'] = -discount_pred.log_prob(discounts.unsqueeze(-1)).mean()
+            losses['discount'] = -discount_pred.log_prob(obs['discount'].unsqueeze(-1)).mean()
         
-        prior_dist = self.dynamics._get_dist(prior)
-        prior_dist_detached = self.dynamics._get_dist({k: v.detach() for k, v in prior.items()})
-        post_dist = self.dynamics._get_dist(post)
-        post_dist_detached = self.dynamics._get_dist({k: v.detach() for k, v in post.items()})
-        kl_lhs = torch.mean(
-            torch.distributions.kl_divergence(post_dist_detached, prior_dist))
-        kl_rhs = torch.mean(
-            torch.distributions.kl_divergence(post_dist, prior_dist_detached))
-        free = self.kl['free']
-        div = self.kl['balance'] * torch.maximum(kl_lhs, Tensor([free])[0])  + (1-self.kl['balance'])*torch.maximum(kl_rhs, Tensor([free])[0])
+        
+        div, prior_dist_detached, post_dist_detached = self.kl_loss(post, prior, self.kl['balance'], self.kl['free'])
         losses['kl'] = div
         model_loss =  sum(self.loss_scale.get(k, 1.0) * v for k, v in losses.items())
         losses['model_loss'] = model_loss
@@ -717,10 +717,22 @@ class DreamerWorldModel(nn.Module):
             return_dict["log_gif"] = self.video_predict(obs, actions, latent, obs_pred, log_key='image')
         return post, return_dict
     
+    def kl_loss(self, post, prior, balance, free):
+        prior_dist = self.dynamics._get_dist(prior)
+        prior_dist_detached = self.dynamics._get_dist({k: v.detach() for k, v in prior.items()})
+        post_dist = self.dynamics._get_dist(post)
+        post_dist_detached = self.dynamics._get_dist({k: v.detach() for k, v in post.items()})
+        kl_lhs = torch.mean(
+            torch.distributions.kl_divergence(post_dist_detached, prior_dist))
+        kl_rhs = torch.mean(
+            torch.distributions.kl_divergence(post_dist, prior_dist_detached))
+        div = balance * torch.maximum(kl_lhs, Tensor([free])[0])  + (1- balance) *torch.maximum(kl_rhs, Tensor([free])[0])
+        return div, prior_dist_detached, post_dist_detached
+
     def log_summary(self, obs, action, embed, image_pred, log_key):
         truth = obs[:6] + 0.5
         recon = image_pred[log_key].mean[:6]
-        init, _ = self.dynamics.observe(embed[:6, :5], action[:6, :5])
+        init, _ = self.dynamics.observe(embed[:6, :5], action[:6, :5], None, obs['is_first'][:6, :5])
         init = [itm[:, -1] for itm in init]
         prior = self.dynamics.imagine(action[:6, 5:], init)
         openl = self.decoder(self.dynamics.get_feature(prior))[log_key].mean
@@ -764,54 +776,104 @@ class ActorCritic(nn.Module):
         self.actor_ent = model_config["actor_ent"]
         self.reward_norm = StreamNorm(**model_config["reward_norm"])
     
-    def compute_losses(self, world_model: DreamerWorldModel, states: Dict[str, TensorType]):
-        # [imagine_horizon, batch_length*batch_size, feature_size]
+    def compute_losses(self, world_model: DreamerWorldModel, start_state: Dict[str, TensorType], is_terminal: TensorType):
+        metrics = {}
+        hor = self.imagine_horizon
+        # The weights are is_terminal flags for the imagination start states.
+        # Technically, they should multiply the losses from the second trajectory
+        # step onwards, which is the first imagined step. However, we are not
+        # training the action that led into the first step anyway, so we can use
+        # them to scale the whole sequence.
         with torch.no_grad():
-            actor_states = {k: v.detach() for k, v in states.items()}
+            start_state = {k: v.detach() for k, v in start_state.items()}
         with FreezeParameters(list(world_model.parameters())):
-            imag_feat, imag_actions  = world_model.imagine_ahead(actor_states, self.actor, self.imagine_horizon)
-            reward = world_model.reward_predictor(imag_feat).mean
-            reward, _ = self.reward_norm(reward)
-            if world_model.discount_predictor:
-                weights = world_model.discount_predictor(imag_feat).mean
-            else:
-                weights = self.discount_factor * torch.ones_like(reward)
-        with FreezeParameters(list(self.target_critic.parameters())):
-            value = self.target_critic(imag_feat).mean
-        returns = lambda_return(reward[:-1], value[:-1], weights[:-1], value[-1], self.discount_lambda)
-        discount_start_shape = weights[:1].size()
-        discount = torch.cumprod(
-            torch.cat([torch.ones(*discount_start_shape).to(weights.device), weights[:-1]], dim=0), dim=0
-        )
-
-        policy = self.actor(imag_feat)
-        actor_ent = policy.entropy().mean()
-        if self.actor_grad == 'dynamics':
-            actor_target = returns
-        elif self.actor_grad == 'reinforce':
-            advantage = returns - self.critic(imag_feat[:-1]).mode()
-            actor_target = (
-                policy.log_prob(imag_actions)[:-1]
-                * advantage.detach()
-            )
-        else:
-            raise NotImplementedError(self.actor_grad)
-        actor_target += self.actor_ent * actor_ent
-        actor_loss = -torch.mean(discount[:-1] * actor_target)
-
-        # Critic Loss
-        # with torch.no_grad():
-        #     val_feat = imag_feat.detach()[:-1]
-        #     target = returns.detach()
-        #     val_discount = discount.detach()
-        val_pred = self.critic(imag_feat[:-1])
-
-        critic_loss = -torch.mean(discount[:-1] * val_pred.log_prob(returns.detach()).unsqueeze(-1))
+            seq = world_model.imagine_ahead(self.actor, start_state, is_terminal, self.imagine_horizon)
+            reward = world_model.reward_predictor(seq["feat"]).mean
+            reward, mets1 = self.reward_norm(reward)
+            mets1 = {f'reward_{k}': v for k, v in mets1.items()}
+        target, mets2 = self.target(seq)
+        actor_loss, mets3 = self.actor_loss(seq, target)
+        critic_loss, mets4 = self.critic_loss(seq, target)
+        metrics.update(**mets1, **mets2, **mets3, **mets4)
         self.update_slow_target()
         return {
             "actor_loss": actor_loss,
             "critic_loss": critic_loss
         }
+    
+    def actor_loss(self, seq, target):
+        # Actions:      0   [a1]  [a2]   a3
+        #                  ^  |  ^  |  ^  |
+        #                 /   v /   v /   v
+        # States:     [z0]->[z1]-> z2 -> z3
+        # Targets:     t0   [t1]  [t2]
+        # Baselines:  [v0]  [v1]   v2    v3
+        # Entropies:        [e1]  [e2]
+        # Weights:    [ 1]  [w1]   w2    w3
+        # Loss:              l1    l2
+        metrics = {}
+        # Two states are lost at the end of the trajectory, one for the boostrap
+        # value prediction and one because the corresponding action does not lead
+        # anywhere anymore. One target is lost at the start of the trajectory
+        # because the initial state comes from the replay buffer.
+        policy = self.actor(seq['feat'][:-2].detach())
+        if self.actor_grad == 'dynamics':
+            actor_target = target[1:]
+        elif self.actor_grad == 'reinforce':
+            baseline = self._target_critic(seq['feat'][:-2]).mode()
+            advantage = (target[1:] - baseline).detach()
+            action = (seq['action'][1:-1]).detach()
+            objective = policy.log_prob(action) * advantage
+        elif self.actor_grad == 'both':
+            baseline = self._target_critic(seq['feat'][:-2]).mode()
+            advantage = (target[1:] - baseline).detach()
+            objective = policy.log_prob(seq['action'][1:-1]) * advantage
+            mix = self.actor_grad_mix
+            objective = mix * target[1:] + (1 - mix) * objective
+        else:
+            raise NotImplementedError(self.actor_grad)
+        ent = policy.entropy()
+        ent_scale = self.actor_ent
+        objective += ent_scale * ent
+        weight = seq['weight'].detach()
+        actor_loss = -(weight[:-2] * objective).mean()
+        metrics['actor_ent'] = ent.mean()
+        metrics['actor_ent_scale'] = ent_scale
+        return actor_loss, metrics
+
+    def critic_loss(self, seq, target):
+        # States:     [z0]  [z1]  [z2]   z3
+        # Rewards:    [r0]  [r1]  [r2]   r3
+        # Values:     [v0]  [v1]  [v2]   v3
+        # Weights:    [ 1]  [w1]  [w2]   w3
+        # Targets:    [t0]  [t1]  [t2]
+        # Loss:        l0    l1    l2
+        dist = self.critic(seq['feat'][:-1])
+        target = target.detach()
+        weight = seq['weight'].detach()
+        critic_loss = -(dist.log_prob(target) * weight[:-1]).mean()
+        metrics = {'critic': dist.mode().mean()}
+        return critic_loss, metrics
+
+
+    def target(self, seq):
+        # States:     [z0]  [z1]  [z2]  [z3]
+        # Rewards:    [r0]  [r1]  [r2]   r3
+        # Values:     [v0]  [v1]  [v2]  [v3]
+        # Discount:   [d0]  [d1]  [d2]   d3
+        # Targets:     t0    t1    t2
+        reward = seq['reward']
+        disc = seq['discount']
+        value = self.target_critic(seq['feat']).mode()
+        # Skipping last time step because it is used for bootstrapping.
+        target = lambda_return(
+            reward[:-1], value[:-1], disc[:-1],
+            bootstrap=value[-1],
+            lambda_=self.discount_lambda)
+        metrics = {}
+        metrics['critic_slow'] = value.mean()
+        metrics['critic_target'] = target.mean()
+        return target, metrics
         
     def update_slow_target(self):
         if self.slow_target:
@@ -832,19 +894,18 @@ class DreamerModel(TorchModelV2, nn.Module):
         self.device = (
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
-        self.state_action = None
 
     def policy(
-        self, obs: TensorType, state_action: Tuple[Dict[str, TensorType], TensorType], explore=True
+        self, obs: TensorType, state_action: Tuple[Dict[str, TensorType], TensorType], explore: bool
     ) -> Tuple[TensorType, List[float], List[TensorType]]:
         """Returns the action. Runs through the encoder, recurrent model,
         and policy to obtain action.
         """
-        if state_action is None:
-            self.state_action = self.world_model.get_initial_state_action(batch_size=obs.shape[0])
-        else:
-            self.state_action = state_action
-        next_state, next_state_feat = self.world_model.encode_latent(self.state_action[0], self.state_action[1], obs)
+        # if state_action is None:
+        #     self.state_action = self.world_model.get_initial_state_action(batch_size=obs.shape[0])
+        # else:
+        #     self.state_action = state_action
+        next_state, next_state_feat = self.world_model.encode_latent(self.state_action[0], self.state_action[1], obs, explore)
 
         action_dist = self.actor_critic.actor(next_state_feat)
         if explore:

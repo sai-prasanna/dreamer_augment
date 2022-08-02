@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 def compute_dreamer_loss(
     obs,
     action,
-    reward,
     model: DreamerModel,
     log=False,
 ):
@@ -45,11 +44,8 @@ def compute_dreamer_loss(
         model (TorchModelV2): DreamerModel, encompassing all other models
         log (bool): If log, generate gifs
     """
-    discount = obs["discount"]  if "discount" in obs else None
-    if discount:
-        del obs["discount"]
-    states, wm_losses = model.world_model.compute_states_and_losses(obs, action, reward, discount, log)
-    ac_losses = model.actor_critic.compute_losses(model.world_model, states)
+    states, wm_losses = model.world_model.compute_states_and_losses(obs, action, log)
+    ac_losses = model.actor_critic.compute_losses(model.world_model, states, obs["is_terminal"])
     return_dict = {
         **wm_losses,
         **ac_losses
@@ -64,8 +60,6 @@ def dreamer_loss(policy, model, dist_class, train_batch):
         log_gif = True
     policy.stats_dict = compute_dreamer_loss(
         {k: convert_to_torch_tensor(v, policy.device) for k, v in train_batch["obs"].items()},
-        train_batch["actions"],
-        train_batch["rewards"],
         policy.model,
         log_gif,
     )
