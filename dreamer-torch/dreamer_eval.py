@@ -212,8 +212,7 @@ def main(config):
 
     print('Logdir', logdir)
     logdir.mkdir(parents=True, exist_ok=True)
-    if config.wandb_api_key:
-        os.environ["WANDB_API_KEY"] = config.wandb_api_key
+    if config.wandb:
         wandb.init(name=config.wandb_name, entity=config.wandb_entity, project=config.wandb_project, dir=str(logdir),
                    config=vars(config))
         wandb.tensorboard.patch(root_logdir=str(logdir))
